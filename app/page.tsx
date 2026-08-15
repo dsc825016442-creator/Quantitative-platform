@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { MarketSnapshot } from "../lib/market-snapshot";
 
 const nav = ["结论", "AI观察", "大类资产", "新闻", "指数×基差", "温度计", "登指数", "纯因子轮动", "大额方向", "判断标尺", "证据链"] as const;
 const industries = [
@@ -80,6 +81,22 @@ function MiniLine() {
   return <svg viewBox="0 0 520 92" className="mini-line" aria-label="近20日市场热度趋势"><path d="M5 61 C38 57 60 25 94 33 S153 78 185 46 S243 19 277 34 S335 68 371 48 S433 73 474 43 S505 29 516 37"/><line x1="0" y1="70" x2="520" y2="70"/><circle cx="516" cy="37" r="4"/></svg>;
 }
 
+function formatTradeDate(value?: string) {
+  if (!value || value.length !== 8) return "等待首次更新";
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+}
+
+function signed(value: number, digits = 2, suffix = "%") {
+  return `${value > 0 ? "+" : ""}${value.toFixed(digits)}${suffix}`;
+}
+
+function moduleStatus(status?: string) {
+  if (status === "live") return "实时已更新";
+  if (status === "partial") return "部分可用";
+  if (status === "unavailable") return "权限不足";
+  return "等待首次更新";
+}
+
 const periodMeta: Record<string,{ scale:number; label:string; sample:string; range:string; character:string }> = {
   "今日": { scale:.36, label:"单日截面", sample:"1 个交易日", range:"2026-08-13", character:"反应快 · 噪声较高" },
   "20日": { scale:1, label:"短周期趋势", sample:"20 个交易日", range:"2026-07-17 → 08-13", character:"灵敏度与稳定性平衡" },
@@ -125,8 +142,81 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [capability, setCapability] = useState<CapabilityKey>("行情");
   const [period, setPeriod] = useState("20日");
+  const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(true);
+  useEffect(() => {
+    let mounted = true;
+    setSnapshotLoading(true);
+    fetch("/api/market-snapshot", { cache: "no-store" })
+      .then(response => response.ok ? response.json() : null)
+      .then(payload => {
+        if (mounted && payload?.snapshot) setSnapshot(payload.snapshot);
+      })
+      .finally(() => {
+        if (mounted) setSnapshotLoading(false);
+      });
+    return () => { mounted = false; };
+  }, [fresh]);
   const filtered = useMemo(() => industries.filter(i => i.n.includes(query.trim())), [query]);
-  const cap = capabilityData[capability];
+  const cap = useMemo(() => {
+    const base = capabilityData[capability];
+    if (!snapshot) return base;
+    const state = snapshot.modules[capability];
+    const common = {
+      ...base,
+      status: moduleStatus(state?.status),
+      note: state ? `${state.message}。数据批次：${formatTradeDate(snapshot.tradeDate)}；页面保留上一次成功快照。` : base.note,
+    };
+    if (capability === "行情") {
+      return {
+        ...common,
+        metrics: [
+          { label: "覆盖证券", value: snapshot.market.securities.toLocaleString("zh-CN"), note: "当日有成交记录" },
+          { label: "更新频率", value: "每日 18:30", note: "北京时间自动任务" },
+          { label: "最新交易日", value: formatTradeDate(snapshot.tradeDate), note: snapshot.source },
+          { label: "全A成交额", value: `${snapshot.market.amountYi.toFixed(0)}亿`, note: "daily 汇总" },
+        ],
+        rows: [
+          ...snapshot.indexes.slice(0, 4).map(index => [
+            index.name,
+            index.close.toLocaleString("zh-CN", { maximumFractionDigits: 2 }),
+            signed(index.pctChange),
+            index.pctChange >= 0 ? "当日上涨" : "当日下跌",
+            "index_daily",
+          ]),
+          ["全A成交额", `${snapshot.market.amountYi.toFixed(0)}亿`, signed(snapshot.market.averagePctChange), `${snapshot.market.up}涨 / ${snapshot.market.down}跌`, "daily 汇总"],
+        ],
+      };
+    }
+    if (capability === "财务") {
+      return {
+        ...common,
+        metrics: [
+          { label: "估值记录", value: state?.records.toLocaleString("zh-CN") ?? "0", note: "daily_basic" },
+          { label: "总市值", value: snapshot.market.totalMarketValueYi == null ? "权限不足" : `${(snapshot.market.totalMarketValueYi / 10_000).toFixed(1)}万亿`, note: "全A汇总" },
+          ...base.metrics.slice(2),
+        ],
+      };
+    }
+    if (capability === "资金") {
+      return {
+        ...common,
+        metrics: [
+          { label: "资金净额", value: snapshot.market.netMoneyflowYi == null ? "权限不足" : signed(snapshot.market.netMoneyflowYi, 1, "亿"), note: "moneyflow 聚合" },
+          { label: "覆盖记录", value: state?.records.toLocaleString("zh-CN") ?? "0", note: "最新交易日" },
+          ...base.metrics.slice(2),
+        ],
+      };
+    }
+    return {
+      ...common,
+      metrics: [
+        { label: "本批记录", value: state?.records.toLocaleString("zh-CN") ?? "0", note: moduleStatus(state?.status) },
+        ...base.metrics.slice(1),
+      ],
+    };
+  }, [capability, snapshot]);
+  const asOf = formatTradeDate(snapshot?.tradeDate);
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -136,24 +226,24 @@ export default function Home() {
         <button onClick={()=>setActive("大类资产")}>FOF周报</button><button onClick={()=>setActive("大额方向")}>资金方向</button><button onClick={()=>setActive("新闻")}>新闻梳理</button>
         <div className="side-section">OPERATIONS</div>
         <button onClick={()=>setActive("判断标尺")}>控制台</button><button onClick={()=>setActive("证据链")}>数据地图</button>
-        <div className="data-state"><b><i/>数据报告已生成</b><span>AS OF · 2026年8月13日</span><span>L0 市场 · 日度</span></div>
+        <div className="data-state"><b><i/>数据报告已生成</b><span>AS OF · {asOf}</span><span>{snapshot ? `${snapshot.source} · ${snapshot.status === "live" ? "完整" : "部分"}` : "演示快照 · 等待自动更新"}</span></div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <nav>{nav.map(item => <button key={item} className={active===item ? "active" : ""} onClick={()=>setActive(item)}>{item}</button>)}</nav>
-          <div className="top-actions"><input aria-label="搜索行业" value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索行业"/><button className="refresh" onClick={()=>setFresh(v=>!v)}>{fresh ? "已更新" : "刷新"}</button></div>
+          <div className="top-actions"><input aria-label="搜索行业" value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索行业"/><button className="refresh" onClick={()=>setFresh(v=>!v)}>{snapshotLoading ? "读取中" : "刷新"}</button></div>
         </header>
 
         <div className="content">
           {active === "结论" ? <>
           <section className="hero-grid">
             <div><p className="eyebrow">MARKET REGIME / TUSHARE</p><h1>今日是老钱在动，<br/>还是新钱在动？</h1><p className="lead">把风格、行业、资金与事件证据放在同一张研究桌上，先判断市场由谁驱动，再决定组合该向哪里倾斜。</p></div>
-            <div className="signal-panel"><div className="signal-head"><span>市场热度轨迹</span><strong>偏防御</strong></div><MiniLine/><div className="signal-metrics"><span><b>84.8%</b>老登热度</span><span><b>-462.9亿</b>三组资金净额</span><span><b>31</b>申万一级行业</span></div></div>
+            <div className="signal-panel"><div className="signal-head"><span>市场热度轨迹</span><strong>{snapshot ? moduleStatus(snapshot.status) : "偏防御"}</strong></div><MiniLine/><div className="signal-metrics"><span><b>{snapshot ? signed(snapshot.market.averagePctChange) : "84.8%"}</b>{snapshot ? "全A平均涨跌" : "老登热度"}</span><span><b>{snapshot?.market.netMoneyflowYi == null ? "-462.9亿" : signed(snapshot.market.netMoneyflowYi, 1, "亿")}</b>资金净额</span><span><b>{snapshot ? snapshot.market.securities.toLocaleString("zh-CN") : "31"}</b>{snapshot ? "当日证券" : "申万一级行业"}</span></div></div>
           </section>
 
           <section className="data-console" id="tushare-console">
-            <div className="console-title"><div><span className="section-index">TUSHARE CORE / 06 MODULES</span><h2>Tushare 数据工作台</h2><p>从接口覆盖走到研究结论：每个模块都带数据状态、关键指标、端点血缘和口径提醒。</p></div><div className="console-health"><i/><span>6 个模块</span><b>主骨架就绪</b><small>演示快照 · 待接服务端增量</small></div></div>
+            <div className="console-title"><div><span className="section-index">TUSHARE CORE / 06 MODULES</span><h2>Tushare 数据工作台</h2><p>从接口覆盖走到研究结论：每个模块都带数据状态、关键指标、端点血缘和口径提醒。</p></div><div className="console-health"><i/><span>每天 18:30</span><b>{snapshot ? "自动快照已接入" : "主骨架就绪"}</b><small>{snapshot ? `交易日 ${asOf} · ${snapshot.errors.length} 项权限提示` : "等待首次自动更新"}</small></div></div>
             <div className="cap-tabs" role="tablist" aria-label="Tushare 数据模块">{capabilityOrder.map(item=><button role="tab" aria-selected={capability===item} className={capability===item?"active":""} onClick={()=>setCapability(item)} key={item}><span>{String(capabilityOrder.indexOf(item)+1).padStart(2,"0")}</span>{item}</button>)}</div>
             <div className={`cap-panel ${cap.tone}`}>
               <div className="cap-intro"><div><span>{cap.kicker}</span><h3>{cap.title}</h3><p>{cap.description}</p></div><b>{cap.status}</b></div>
