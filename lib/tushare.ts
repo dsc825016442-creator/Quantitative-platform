@@ -225,7 +225,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     await Promise.all([
       query(token, "daily_basic", { trade_date: tradeDate }, "ts_code,trade_date,total_mv,pe_ttm,pb"),
       query(token, "moneyflow", { trade_date: tradeDate }, "ts_code,trade_date,net_mf_amount"),
-      query(token, "forecast", { start_date: dateDaysAgo(30), end_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
+      query(token, "forecast", { ann_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
       query(token, "fund_daily", { trade_date: tradeDate }, "ts_code,trade_date,close,pct_chg,amount"),
       query(token, "fut_daily", { trade_date: tradeDate, exchange: "CFFEX" }, "ts_code,trade_date,close,settle,vol,oi"),
       query(token, "stock_basic", { list_status: "L" }, "ts_code,name,industry,market,list_date"),
@@ -337,7 +337,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
       ? { status: indexes.length === indexDefinitions.length && industries.length ? "live" : "partial", records: indexes.length + industries.length, message: industries.length ? `${industries.length} 个申万行业与核心指数已更新` : "核心指数已更新；行业行情暂缺" }
       : { status: "unavailable", records: 0, message: "核心指数接口不可用" },
     资金: moduleState(moneyflow, "个股资金流已聚合"),
-    事件预期: moduleState(forecast, "近30日业绩预告已更新"),
+    事件预期: moduleState(forecast, "当日业绩预告已更新"),
     期货基金: futures.error && funds.error
       ? { status: "unavailable", records: 0, message: `${futures.error}; ${funds.error}` }
       : { status: futures.error || funds.error ? "partial" : "live", records: futures.rows.length + funds.rows.length, message: `期货 ${futures.rows.length} / 基金 ${funds.rows.length}` },

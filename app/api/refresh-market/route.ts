@@ -81,7 +81,7 @@ export async function POST(request: Request) {
     try {
       const snapshot = await buildMarketSnapshot(token);
 
-      if (latest?.tradeDate === snapshot.tradeDate && latest.status === "live" && snapshot.status !== "live") {
+      if (latest?.tradeDate === snapshot.tradeDate && latest.status === "live" && snapshot.quality.score < 70) {
         await db.update(refreshRuns).set({
           finishedAt: new Date().toISOString(),
           status: "skipped",
