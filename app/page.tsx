@@ -190,6 +190,7 @@ export default function Home() {
     }
     if (capability === "财务") {
       const valuation = snapshot.domains?.valuation;
+      const financialRows = snapshot.domains?.financials ?? [];
       return {
         ...common,
         metrics: [
@@ -198,7 +199,13 @@ export default function Home() {
           { label: "PE(TTM)中位数", value: valuation?.medianPeTtm == null ? "暂无" : valuation.medianPeTtm.toFixed(2), note: "仅统计正值" },
           { label: "PB中位数", value: valuation?.medianPb == null ? "暂无" : valuation.medianPb.toFixed(2), note: `有效 PE 覆盖 ${((valuation?.profitablePeCoverage ?? 0) * 100).toFixed(1)}%` },
         ],
-        rows: valuation ? [
+        rows: financialRows.length ? financialRows.slice(0, 12).map(item => [
+          item.name,
+          item.roe == null ? "ROE 暂无" : `ROE ${item.roe.toFixed(2)}%`,
+          item.grossMargin == null ? "毛利率暂无" : `毛利率 ${item.grossMargin.toFixed(2)}%`,
+          `负债率 ${item.debtToAssets?.toFixed(2) ?? "—"}%`,
+          `fina_indicator · ${formatTradeDate(item.announcedAt)}`,
+        ]) : valuation ? [
           ["全A PE(TTM) 中位数", valuation.medianPeTtm?.toFixed(2) ?? "暂无", "当日截面", "剔除负值与异常值", "daily_basic"],
           ["全A PB 中位数", valuation.medianPb?.toFixed(2) ?? "暂无", "当日截面", "剔除非正值", "daily_basic"],
           ["盈利公司 PE 覆盖", `${(valuation.profitablePeCoverage * 100).toFixed(1)}%`, "当日截面", "正 PE / 估值记录", "daily_basic"],

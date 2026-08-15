@@ -60,6 +60,17 @@ export type EventSnapshot = {
   changeMax: number | null;
 };
 
+export type FinancialSnapshot = {
+  code: string;
+  name: string;
+  announcedAt: string;
+  endDate: string;
+  roe: number | null;
+  grossMargin: number | null;
+  debtToAssets: number | null;
+  operatingCashflowRatio: number | null;
+};
+
 export type InstrumentSnapshot = {
   code: string;
   close: number;
@@ -92,6 +103,7 @@ export type MarketSnapshot = {
       medianPb: number | null;
       profitablePeCoverage: number;
     };
+    financials: FinancialSnapshot[];
     flows: SecurityFlowSnapshot[];
     events: EventSnapshot[];
     futures: InstrumentSnapshot[];

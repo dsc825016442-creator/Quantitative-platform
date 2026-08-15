@@ -221,15 +221,17 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     ["399006.SZ", "创业板指"],
   ] as const;
 
-  const [dailyBasic, moneyflow, forecast, funds, futures, stockBasic, swDaily, ...indexResults] =
+  const [dailyBasic, moneyflow, forecast, funds, futures, stockBasic, swClassify, swDaily, financials, ...indexResults] =
     await Promise.all([
       query(token, "daily_basic", { trade_date: tradeDate }, "ts_code,trade_date,total_mv,pe_ttm,pb"),
       query(token, "moneyflow", { trade_date: tradeDate }, "ts_code,trade_date,net_mf_amount"),
-      query(token, "forecast", { ann_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
+      query(token, "forecast", { start_date: dateDaysAgo(30), end_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
       query(token, "fund_daily", { trade_date: tradeDate }, "ts_code,trade_date,close,pct_chg,amount"),
       query(token, "fut_daily", { trade_date: tradeDate, exchange: "CFFEX" }, "ts_code,trade_date,close,settle,vol,oi"),
       query(token, "stock_basic", { list_status: "L" }, "ts_code,name,industry,market,list_date"),
+      query(token, "index_classify", { level: "L1", src: "SW2021" }, "index_code,industry_name,level,industry_code,is_pub"),
       query(token, "sw_daily", { start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,name,close,pct_change,pe,pb"),
+      query(token, "fina_indicator", { start_date: dateDaysAgo(30), end_date: tradeDate }, "ts_code,ann_date,end_date,roe,grossprofit_margin,debt_to_assets,ocf_to_or"),
       ...indexDefinitions.map(([tsCode]) =>
         query(token, "index_daily", { ts_code: tsCode, start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,close,pct_chg"),
       ),
@@ -261,9 +263,12 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
   const dailyChanges = new Map(daily.rows.map(row => [String(row.ts_code), number(row.pct_chg)]));
   const peValues = dailyBasic.rows.map(row => number(row.pe_ttm)).filter(value => value > 0 && value < 1_000);
   const pbValues = dailyBasic.rows.map(row => number(row.pb)).filter(value => value > 0 && value < 100);
+  const levelOneCodes = new Set(swClassify.rows.map(row => String(row.index_code)));
+  const levelOneNames = new Map(swClassify.rows.map(row => [String(row.index_code), String(row.industry_name || row.index_code)]));
   const industriesByCode = new Map<string, Record<string, unknown>[]>();
   for (const row of swDaily.rows) {
     const code = String(row.ts_code);
+    if (levelOneCodes.size && !levelOneCodes.has(code)) continue;
     industriesByCode.set(code, [...(industriesByCode.get(code) ?? []), row]);
   }
   const industries = [...industriesByCode.entries()].flatMap(([code, rows]) => {
@@ -278,7 +283,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     };
     return [{
       code,
-      name: String(latest.name || code),
+      name: levelOneNames.get(code) ?? String(latest.name || code),
       close,
       pctChange: number(latest.pct_change),
       return20d: periodReturn(20),
@@ -302,6 +307,16 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     changeMin: optionalNumber(row.p_change_min),
     changeMax: optionalNumber(row.p_change_max),
   })).slice(0, 30);
+  const financialUpdates = financials.rows.map(row => ({
+    code: String(row.ts_code),
+    name: securityNames.get(String(row.ts_code)) ?? String(row.ts_code),
+    announcedAt: String(row.ann_date || ""),
+    endDate: String(row.end_date || ""),
+    roe: optionalNumber(row.roe),
+    grossMargin: optionalNumber(row.grossprofit_margin),
+    debtToAssets: optionalNumber(row.debt_to_assets),
+    operatingCashflowRatio: optionalNumber(row.ocf_to_or),
+  })).slice(0, 50);
   const instruments = (rows: Record<string, unknown>[], includeOpenInterest: boolean) => rows
     .map(row => ({
       code: String(row.ts_code),
@@ -315,7 +330,9 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
 
   const moduleResults: Record<string, ModuleState> = {
     行情: { status: "live", records: daily.rows.length, message: `最新交易日 ${tradeDate}` },
-    财务: moduleState(dailyBasic, "日频估值截面已更新"),
+    财务: financials.error
+      ? { status: "partial", records: dailyBasic.rows.length, message: `估值已更新；财务指标受限：${financials.error}` }
+      : { status: "live", records: dailyBasic.rows.length + financials.rows.length, message: `估值与近30日财务指标已更新（财务 ${financials.rows.length}）` },
     指数行业: indexes.length
       ? { status: indexes.length === indexDefinitions.length && industries.length ? "live" : "partial", records: indexes.length + industries.length, message: industries.length ? `${industries.length} 个申万行业与核心指数已更新` : "核心指数已更新；行业行情暂缺" }
       : { status: "unavailable", records: 0, message: "核心指数接口不可用" },
@@ -352,7 +369,9 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     funds.error,
     futures.error,
     stockBasic.error,
+    swClassify.error,
     swDaily.error,
+    financials.error,
     ...indexResults.map(result => result.error),
   ].filter((message): message is string => Boolean(message));
   const hasUnavailable =
@@ -374,6 +393,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
         medianPb: median(pbValues),
         profitablePeCoverage: dailyBasic.rows.length ? peValues.length / dailyBasic.rows.length : 0,
       },
+      financials: financialUpdates,
       flows,
       events,
       futures: instruments(futures.rows, true),
