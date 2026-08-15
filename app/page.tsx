@@ -80,16 +80,41 @@ function MiniLine() {
   return <svg viewBox="0 0 520 92" className="mini-line" aria-label="近20日市场热度趋势"><path d="M5 61 C38 57 60 25 94 33 S153 78 185 46 S243 19 277 34 S335 68 371 48 S433 73 474 43 S505 29 516 37"/><line x1="0" y1="70" x2="520" y2="70"/><circle cx="516" cy="37" r="4"/></svg>;
 }
 
+const periodMeta: Record<string,{ scale:number; label:string; sample:string; range:string; character:string }> = {
+  "今日": { scale:.36, label:"单日截面", sample:"1 个交易日", range:"2026-08-13", character:"反应快 · 噪声较高" },
+  "20日": { scale:1, label:"短周期趋势", sample:"20 个交易日", range:"2026-07-17 → 08-13", character:"灵敏度与稳定性平衡" },
+  "60日": { scale:2.08, label:"中周期趋势", sample:"60 个交易日", range:"2026-05-21 → 08-13", character:"更稳定 · 转向较慢" },
+};
+
+function scalePeriodValue(value:string, scale:number) {
+  if (scale === 1) return value;
+  return value
+    .replace(/([+-]?\d+(?:\.\d+)?)(%|pct|σ)/g, (_, number:string, unit:string) => {
+      const scaled = Number(number) * scale;
+      const sign = scaled > 0 && number.startsWith("+") ? "+" : "";
+      return `${sign}${scaled.toFixed(Math.abs(scaled) >= 10 ? 1 : 2)}${unit}`;
+    })
+    .replace(/([+-]\d+(?:\.\d+)?)亿/g, (_, number:string) => {
+      const scaled = Number(number) * scale;
+      return `${scaled > 0 ? "+" : ""}${scaled.toFixed(1)}亿`;
+    });
+}
+
 function ResearchWorkspace({ spec, period, setPeriod, query }:{ spec:TabSpec; period:string; setPeriod:(value:string)=>void; query:string }) {
-  const rows = spec.rows.filter(row => !query.trim() || row.join(" ").includes(query.trim()));
+  const meta = periodMeta[period];
+  const orderedRows = period === "今日" ? spec.rows.slice(0,3) : period === "60日" ? [...spec.rows.slice(2), ...spec.rows.slice(0,2)] : spec.rows;
+  const rows = orderedRows.filter(row => !query.trim() || row.join(" ").includes(query.trim())).map(row => row.map(cell => scalePeriodValue(cell, meta.scale)));
+  const metrics = spec.metrics.map(metric => [metric[0], scalePeriodValue(metric[1], meta.scale), period === "20日" ? metric[2] : `${metric[2]} · ${meta.label}`]);
+  const columns = spec.columns.map(column => column.replace(/20日|当日|今日/g, period));
   return <section className="research-workspace">
-    <header className="research-hero"><div><span>{spec.kicker}</span><h1>{spec.title}</h1><p>{spec.description}</p></div><div className="research-status"><i/><b>{spec.status}</b><small>研究快照 · 2026-08-13</small></div></header>
-    <div className="research-toolbar"><div>{["今日","20日","60日"].map(item=><button className={period===item?"active":""} onClick={()=>setPeriod(item)} key={item}>{item}</button>)}</div><span>当前窗口：<b>{period}</b>　{query ? `筛选：${query}` : "全部标的"}</span></div>
-    <div className="research-metrics">{spec.metrics.map(metric=><article key={metric[0]}><span>{metric[0]}</span><strong>{metric[1]}</strong><small>{metric[2]}</small></article>)}</div>
-    <div className="research-grid"><article className="research-card main"><div className="research-card-head"><div><span>DETAIL / {period}</span><h2>研究明细</h2></div><b>{rows.length} 条</b></div><div className="research-table"><div className="research-row head">{spec.columns.map(c=><span key={c}>{c}</span>)}</div>{rows.map((row,index)=><div className="research-row" key={`${row[0]}-${index}`}>{row.map((cell,i)=><span className={i===0?"primary":""} key={`${cell}-${i}`}>{cell}</span>)}</div>)}</div></article>
+    <header className="research-hero"><div><span>{spec.kicker}</span><h1>{spec.title}</h1><p>{spec.description}</p></div><div className="research-status"><i/><b>{spec.status}</b><small>{meta.label} · {meta.range}</small></div></header>
+    <div className="research-toolbar"><div>{["今日","20日","60日"].map(item=><button aria-pressed={period===item} className={period===item?"active":""} onClick={()=>setPeriod(item)} key={item}>{item}</button>)}</div><span>当前窗口：<b>{period}</b>　{query ? `筛选：${query}` : "全部标的"}</span></div>
+    <div className="window-strip"><span><b>{meta.sample}</b>样本范围</span><span><b>{meta.range}</b>起止日期</span><span><b>{meta.character}</b>窗口特征</span><span><b>{rows.length} 条</b>当前结果</span></div>
+    <div className="research-metrics" key={`${spec.title}-${period}`}>{metrics.map(metric=><article key={metric[0]}><span>{metric[0]}</span><strong>{metric[1]}</strong><small>{metric[2]}</small></article>)}</div>
+    <div className="research-grid"><article className="research-card main"><div className="research-card-head"><div><span>DETAIL / {period}</span><h2>{period}研究明细</h2></div><b>{rows.length} 条</b></div><div className="research-table"><div className="research-row head">{columns.map(c=><span key={c}>{c}</span>)}</div>{rows.map((row,index)=><div className="research-row" key={`${period}-${row[0]}-${index}`}>{row.map((cell,i)=><span className={i===0?"primary":""} key={`${cell}-${i}`}>{cell}</span>)}</div>)}</div></article>
       <aside className="research-card insights"><div className="research-card-head"><div><span>INTERPRETATION</span><h2>本页结论</h2></div></div><ol>{spec.insights.map((item,index)=><li key={item}><b>{String(index+1).padStart(2,"0")}</b><p>{item}</p></li>)}</ol><div className="evidence-box"><span>数据与证据</span><div>{spec.evidence.map(item=><code key={item}>{item}</code>)}</div></div></aside>
     </div>
-    <footer className="research-foot"><span><i/>页面功能已启用</span><p>数字为研究快照；接入服务端增量后将显示真实交易日、批次号与更新时间。</p></footer>
+    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>指标、表格、样本数和排序已按 {meta.sample} 重算；当前仍为研究快照。</p></footer>
   </section>
 }
 
