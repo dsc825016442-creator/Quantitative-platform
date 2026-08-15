@@ -206,6 +206,118 @@ function qualityChecks(
   return checks;
 }
 
+function clamp(value: number, minimum = 0, maximum = 100) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function buildBacktest(indexResults: QueryResult[]): MarketSnapshot["analytics"]["backtest"] {
+  const histories = indexResults.map(result => new Map(result.rows.map(row => [String(row.trade_date), number(row.close)])));
+  const dates = [...histories[0].keys()]
+    .filter(date => histories.every(history => history.has(date)))
+    .sort();
+  if (dates.length < 42) return null;
+  let equity = 1;
+  let benchmarkEquity = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  let excessWins = 0;
+  const returns: number[] = [];
+  for (let day = 20; day < dates.length; day += 1) {
+    const previousDate = dates[day - 1];
+    const signalDate = dates[day - 20];
+    const currentDate = dates[day];
+    const ranking = histories.map((history, index) => ({
+      index,
+      momentum: number(history.get(previousDate)) / number(history.get(signalDate)) - 1,
+    })).sort((left, right) => right.momentum - left.momentum);
+    const weights = new Array(histories.length).fill(0.1);
+    weights[ranking[0].index] = 0.35;
+    weights[ranking[1].index] = 0.25;
+    weights[ranking[2].index] = 0.2;
+    const dailyReturns = histories.map(history => number(history.get(currentDate)) / number(history.get(previousDate)) - 1);
+    const modelReturn = dailyReturns.reduce((sum, value, index) => sum + value * weights[index], 0);
+    const benchmarkReturn = dailyReturns.reduce((sum, value) => sum + value, 0) / dailyReturns.length;
+    equity *= 1 + modelReturn;
+    benchmarkEquity *= 1 + benchmarkReturn;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.min(maxDrawdown, equity / peak - 1);
+    excessWins += modelReturn > benchmarkReturn ? 1 : 0;
+    returns.push(modelReturn);
+  }
+  const average = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance = returns.reduce((sum, value) => sum + (value - average) ** 2, 0) / Math.max(1, returns.length - 1);
+  return {
+    startDate: dates[20],
+    endDate: dates.at(-1) ?? dates[20],
+    observations: returns.length,
+    totalReturnPct: (equity - 1) * 100,
+    benchmarkReturnPct: (benchmarkEquity - 1) * 100,
+    annualizedVolatilityPct: Math.sqrt(variance * 252) * 100,
+    maxDrawdownPct: maxDrawdown * 100,
+    excessWinRatePct: returns.length ? excessWins / returns.length * 100 : 0,
+    methodology: "使用前20日动量排名生成次日权重；不使用当日收盘后的未来信息。",
+  };
+}
+
+function buildAnalytics(
+  periods: MarketSnapshot["periods"],
+  market: MarketSnapshot["market"],
+  industries: MarketSnapshot["domains"]["industries"],
+  financials: MarketSnapshot["domains"]["financials"],
+  valuation: MarketSnapshot["domains"]["valuation"],
+  indexResults: QueryResult[],
+): MarketSnapshot["analytics"] {
+  const backtest = buildBacktest(indexResults);
+  const industryAdvanceRate = industries.length
+    ? industries.filter(industry => industry.pctChange > 0).length / industries.length * 100
+    : 0;
+  const averageRoe = financials.length
+    ? financials.reduce((sum, item) => sum + (item.roe ?? 0), 0) / financials.length
+    : 0;
+  const factorInputs = [
+    { name: "动量", score: clamp(50 + periods["20日"].averageReturnPct * 5), evidence: `核心指数20日均值 ${periods["20日"].averageReturnPct.toFixed(2)}%` },
+    { name: "价值", score: clamp(100 - (valuation.medianPeTtm ?? 50) * 1.5), evidence: `PE(TTM)中位数 ${valuation.medianPeTtm?.toFixed(2) ?? "暂无"}` },
+    { name: "质量", score: clamp(45 + averageRoe * 2), evidence: `代表公司ROE均值 ${averageRoe.toFixed(2)}%` },
+    { name: "广度", score: clamp(industryAdvanceRate), evidence: `申万一级上涨占比 ${industryAdvanceRate.toFixed(1)}%` },
+    { name: "流动性", score: clamp(35 + Math.log10(Math.max(1, market.amountYi)) * 12), evidence: `全A成交额 ${market.amountYi.toFixed(0)}亿元` },
+  ];
+  const factors = factorInputs.map(factor => ({
+    ...factor,
+    score: Math.round(factor.score),
+    signal: factor.score >= 65 ? "偏强" : factor.score <= 35 ? "偏弱" : "中性",
+  }));
+  const rankedIndexes = [...periods["20日"].indexes].sort((left, right) => right.returnPct - left.returnPct);
+  const rankWeights = [30, 25, 20, 15, 10];
+  const portfolio = rankedIndexes.map((index, rank) => ({
+    code: index.code,
+    name: index.name,
+    weight: rankWeights[rank] ?? 0,
+    reason: `20日收益排名第 ${rank + 1}（${index.returnPct.toFixed(2)}%）`,
+  }));
+  const bestIndustry = industries[0];
+  const observations: MarketSnapshot["analytics"]["observations"] = [
+    {
+      title: "市场广度",
+      direction: industryAdvanceRate >= 55 ? "positive" : industryAdvanceRate < 40 ? "negative" : "neutral",
+      summary: `${industries.filter(item => item.pctChange > 0).length}/${industries.length} 个申万一级行业上涨，广度为 ${industryAdvanceRate.toFixed(1)}%。`,
+      evidence: ["sw_daily", `trade_date=${periods.今日.endDate}`],
+    },
+    {
+      title: "中期主线",
+      direction: (bestIndustry?.return20d ?? 0) > 0 ? "positive" : "neutral",
+      summary: bestIndustry ? `${bestIndustry.name} 20日收益 ${bestIndustry.return20d?.toFixed(2) ?? "—"}%，位居一级行业首位。` : "行业历史窗口暂不可用。",
+      evidence: ["index_classify", "sw_daily"],
+    },
+    {
+      title: "资金与风险",
+      direction: (market.netMoneyflowYi ?? 0) >= 0 ? "positive" : "negative",
+      summary: `全A资金流估算 ${market.netMoneyflowYi?.toFixed(1) ?? "—"} 亿元；该口径为成交拆单模型，不代表账户真实迁移。`,
+      evidence: ["moneyflow", "算法估算口径"],
+    },
+  ];
+  return { observations, factors, portfolio, backtest };
+}
+
 export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot> {
   const daily = await latestDaily(token);
   if (daily.error || !daily.rows.length) {
@@ -374,6 +486,14 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     "20日": buildPeriod(indexDefinitions, indexResults, 20, tradeDate),
     "60日": buildPeriod(indexDefinitions, indexResults, 60, tradeDate),
   };
+  const valuation = {
+    medianPeTtm: median(peValues),
+    medianPb: median(pbValues),
+    profitablePeCoverage: dailyBasic.rows.length ? peValues.length / dailyBasic.rows.length : 0,
+  };
+  const futuresList = instruments(futures.rows, true);
+  const fundsList = instruments(funds.rows, false);
+  const analytics = buildAnalytics(periods, market, industries, financialUpdates, valuation, indexResults);
   const checks = qualityChecks(daily.rows, indexes, market, moduleResults);
   const qualityScore = Math.round(
     checks.reduce((sum, check) => sum + (check.status === "pass" ? 100 : check.status === "warn" ? 60 : 0), 0) / checks.length,
@@ -404,17 +524,14 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     periods,
     domains: {
       industries,
-      valuation: {
-        medianPeTtm: median(peValues),
-        medianPb: median(pbValues),
-        profitablePeCoverage: dailyBasic.rows.length ? peValues.length / dailyBasic.rows.length : 0,
-      },
+      valuation,
       financials: financialUpdates,
       flows,
       events,
-      futures: instruments(futures.rows, true),
-      funds: instruments(funds.rows, false),
+      futures: futuresList,
+      funds: fundsList,
     },
+    analytics,
     modules: moduleResults,
     quality: { score: qualityScore, checks },
     errors,

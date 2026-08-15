@@ -103,20 +103,60 @@ const periodMeta: Record<string,{ scale:number; label:string; sample:string; ran
   "60日": { scale:2.08, label:"中周期趋势", sample:"60 个交易日", range:"2026-05-21 → 08-13", character:"更稳定 · 转向较慢" },
 };
 
-function ResearchWorkspace({ spec, tabKey, period, setPeriod, query, periods }:{ spec:TabSpec; tabKey:ResearchTab; period:string; setPeriod:(value:string)=>void; query:string; periods?: MarketSnapshot["periods"] }) {
+function ResearchWorkspace({ spec, tabKey, period, setPeriod, query, periods, analytics }:{ spec:TabSpec; tabKey:ResearchTab; period:string; setPeriod:(value:string)=>void; query:string; periods?: MarketSnapshot["periods"]; analytics?: MarketSnapshot["analytics"] }) {
   const meta = periodMeta[period];
   const livePeriod = periods?.[period as keyof MarketSnapshot["periods"]];
   const orderedRows = period === "今日" ? spec.rows.slice(0,3) : period === "60日" ? [...spec.rows.slice(2), ...spec.rows.slice(0,2)] : spec.rows;
   const fallbackRows = orderedRows.filter(row => !query.trim() || row.join(" ").includes(query.trim()));
-  const rows = tabKey === "指数×基差" && livePeriod
+  let rows = tabKey === "指数×基差" && livePeriod
     ? livePeriod.indexes.map(index => [index.name, index.close.toLocaleString("zh-CN", { maximumFractionDigits: 2 }), signed(index.returnPct), signed(index.pctChange), "index_daily"])
     : fallbackRows;
-  const metrics = livePeriod
+  let metrics = livePeriod
     ? [["核心指数区间", signed(livePeriod.averageReturnPct), `${livePeriod.indexes.length} 个指数真实行情`], ...spec.metrics.slice(0, 3)]
     : spec.metrics;
-  const columns = tabKey === "指数×基差" && livePeriod
+  let columns = tabKey === "指数×基差" && livePeriod
     ? ["指数", "最新点位", `${period}收益`, "当日涨跌", "来源"]
     : spec.columns;
+  if (analytics && tabKey === "AI观察") {
+    columns = ["观察", "方向", "证据摘要", "数据源", "口径"];
+    rows = analytics.observations.map(item => [item.title, item.direction === "positive" ? "偏正向" : item.direction === "negative" ? "偏负向" : "中性", item.summary, item.evidence.join(" / "), "规则引擎"]);
+    metrics = [["实时观察", String(rows.length), "每日刷新"], ["正向", String(analytics.observations.filter(item => item.direction === "positive").length), "规则判断"], ["负向", String(analytics.observations.filter(item => item.direction === "negative").length), "需关注"], ["生成方式", "可解释", "非大模型臆测"]];
+  }
+  if (analytics && tabKey === "纯因子轮动") {
+    columns = ["因子", "评分", "信号", "证据", "口径"];
+    rows = analytics.factors.map(item => [item.name, `${item.score} / 100`, item.signal, item.evidence, "自建代理因子"]);
+    metrics = analytics.factors.slice(0, 4).map(item => [item.name, String(item.score), item.signal]);
+  }
+  if (analytics && tabKey === "大类资产") {
+    columns = ["资产篮子", "建议权重", "20日依据", "约束", "性质"];
+    rows = analytics.portfolio.map(item => [item.name, `${item.weight}%`, item.reason, "单资产≤30%", "研究组合"]);
+    metrics = [["模型权重", "100%", "五类核心指数"], ["最高单项", `${Math.max(...analytics.portfolio.map(item => item.weight))}%`, "集中度约束"], ["再平衡", "每日", "使用前一日信号"], ["交易属性", "研究", "不自动下单"]];
+  }
+  if (analytics?.backtest && tabKey === "判断标尺") {
+    const backtest = analytics.backtest;
+    columns = ["指标", "策略", "基准 / 阈值", "样本", "说明"];
+    rows = [
+      ["累计收益", signed(backtest.totalReturnPct), signed(backtest.benchmarkReturnPct), `${backtest.observations} 日`, "20日动量轮动"],
+      ["年化波动", signed(backtest.annualizedVolatilityPct), "风险越低越稳", `${formatTradeDate(backtest.startDate)} 起`, "日收益年化"],
+      ["最大回撤", signed(backtest.maxDrawdownPct), "> -8%", formatTradeDate(backtest.endDate), "历史窗口"],
+      ["超额胜率", signed(backtest.excessWinRatePct), "> 50%", `${backtest.observations} 日`, "相对等权基准"],
+    ];
+    metrics = [["策略收益", signed(backtest.totalReturnPct), "无未来函数"], ["等权基准", signed(backtest.benchmarkReturnPct), "5指数"], ["最大回撤", signed(backtest.maxDrawdownPct), "历史窗口"], ["超额胜率", signed(backtest.excessWinRatePct), `${backtest.observations} 日`]];
+  }
+  const copySummary = () => {
+    if (!analytics) return;
+    const summary = analytics.observations.map(item => `${item.title}：${item.summary}`).join("\n");
+    void navigator.clipboard.writeText(summary);
+  };
+  const downloadAnalytics = () => {
+    if (!analytics) return;
+    const href = URL.createObjectURL(new Blob([JSON.stringify(analytics, null, 2)], { type: "application/json" }));
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = `market-research-${period}.json`;
+    anchor.click();
+    URL.revokeObjectURL(href);
+  };
   const range = livePeriod ? `${formatTradeDate(livePeriod.startDate)} → ${formatTradeDate(livePeriod.endDate)}` : meta.range;
   return <section className="research-workspace">
     <header className="research-hero"><div><span>{spec.kicker}</span><h1>{spec.title}</h1><p>{spec.description}</p></div><div className="research-status"><i/><b>{spec.status}</b><small>{livePeriod ? "真实行情窗口" : meta.label} · {range}</small></div></header>
@@ -126,7 +166,7 @@ function ResearchWorkspace({ spec, tabKey, period, setPeriod, query, periods }:{
     <div className="research-grid"><article className="research-card main"><div className="research-card-head"><div><span>DETAIL / {period}</span><h2>{period}研究明细</h2></div><b>{rows.length} 条</b></div><div className="research-table"><div className="research-row head">{columns.map(c=><span key={c}>{c}</span>)}</div>{rows.map((row,index)=><div className="research-row" key={`${period}-${row[0]}-${index}`}>{row.map((cell,i)=><span className={i===0?"primary":""} key={`${cell}-${i}`}>{cell}</span>)}</div>)}</div></article>
       <aside className="research-card insights"><div className="research-card-head"><div><span>INTERPRETATION</span><h2>本页结论</h2></div></div><ol>{spec.insights.map((item,index)=><li key={item}><b>{String(index+1).padStart(2,"0")}</b><p>{item}</p></li>)}</ol><div className="evidence-box"><span>数据与证据</span><div>{spec.evidence.map(item=><code key={item}>{item}</code>)}</div></div></aside>
     </div>
-    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>{livePeriod ? "核心指数已按真实交易日重算；其他研究维度将在 P1/P2 逐项替换。" : `当前仍为 ${meta.sample} 研究快照。`}</p></footer>
+    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>{analytics ? "P2 分析由可追溯规则生成；组合仅供研究，不会自动交易。" : livePeriod ? "核心指数已按真实交易日重算。" : `当前仍为 ${meta.sample} 研究快照。`}</p>{analytics && <div className="share-actions"><button onClick={copySummary}>复制摘要</button><button onClick={downloadAnalytics}>导出 JSON</button></div>}</footer>
   </section>
 }
 
@@ -342,7 +382,7 @@ export default function Home() {
           <section className="block compact"><button className="section-toggle" onClick={()=>setExpanded(expanded === "factor" ? null : "factor")}><span>{expanded === "factor" ? "▾" : "▸"}</span><b>风格与行业因子明细 · Barra CNE6 纯因子（查阅用）</b><em>部分因子需付费数据</em></button>{expanded === "factor" && <div className="factor-strip"><span>价值 <b>+0.71σ</b></span><span>规模 <b>-0.43σ</b></span><span>动量 <b>-0.28σ</b></span><span>波动 <b>+0.56σ</b></span><span>流动性 <b>-0.19σ</b></span></div>}</section>
 
           <section className="block data-map"><div className="block-head"><div><span className="section-index">02 / DATA MAP</span><h2>数据能力与缺口</h2></div><p>从“可展示”推进到“可复现、可审计、可商用”的最短补数路径。</p></div><div className="capability-grid"><div><span className="cap-tag ready">现有可做</span><h3>Tushare 主骨架</h3><p>日线、财务、指数与成员、行业映射、资金流、公告事件、研报盈利预测、期货与基金基础。</p></div><div><span className="cap-tag free">免费补充</span><h3>盘中与原文证据</h3><p>AKShare、交易所/巨潮公告、央行与统计局；补足实时行情、公告原文、宏观高频与交叉校验。</p></div><div><span className="cap-tag paid">建议付费</span><h3>一致预期与风险模型</h3><p>Wind / iFinD / Choice 等机构数据；补齐点时一致预期、Barra 风险暴露、基金持仓穿透与稳定商用授权。</p></div></div></section>
-          </> : <ResearchWorkspace spec={tabData[active]} tabKey={active} period={period} setPeriod={setPeriod} query={query} periods={snapshot?.periods}/>}
+          </> : <ResearchWorkspace spec={tabData[active]} tabKey={active} period={period} setPeriod={setPeriod} query={query} periods={snapshot?.periods} analytics={snapshot?.analytics}/>}
         </div>
       </section>
     </main>

@@ -79,6 +79,38 @@ export type InstrumentSnapshot = {
   openInterest: number | null;
 };
 
+export type AnalyticsSnapshot = {
+  observations: Array<{
+    title: string;
+    direction: "positive" | "neutral" | "negative";
+    summary: string;
+    evidence: string[];
+  }>;
+  factors: Array<{
+    name: string;
+    score: number;
+    signal: string;
+    evidence: string;
+  }>;
+  portfolio: Array<{
+    code: string;
+    name: string;
+    weight: number;
+    reason: string;
+  }>;
+  backtest: {
+    startDate: string;
+    endDate: string;
+    observations: number;
+    totalReturnPct: number;
+    benchmarkReturnPct: number;
+    annualizedVolatilityPct: number;
+    maxDrawdownPct: number;
+    excessWinRatePct: number;
+    methodology: string;
+  } | null;
+};
+
 export type MarketSnapshot = {
   generatedAt: string;
   tradeDate: string;
@@ -109,6 +141,7 @@ export type MarketSnapshot = {
     futures: InstrumentSnapshot[];
     funds: InstrumentSnapshot[];
   };
+  analytics: AnalyticsSnapshot;
   modules: Record<string, ModuleState>;
   quality: {
     score: number;

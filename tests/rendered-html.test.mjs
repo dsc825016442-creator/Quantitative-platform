@@ -61,6 +61,9 @@ test("keeps tabs, periods, filters and disclosures interactive", async () => {
   assert.match(page, /snapshot\.domains\?\.flows/);
   assert.match(page, /snapshot\.domains\?\.events/);
   assert.match(page, /snapshot\.domains\.futures/);
+  assert.match(page, /snapshot\?\.analytics/);
+  assert.match(page, /copySummary/);
+  assert.match(page, /downloadAnalytics/);
 });
 
 test("protects and schedules the production market refresh", async () => {
