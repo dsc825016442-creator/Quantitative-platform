@@ -36,6 +36,21 @@ function number(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function optionalNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function median(values: number[]) {
+  if (!values.length) return null;
+  const ordered = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2
+    ? ordered[middle]
+    : (ordered[middle - 1] + ordered[middle]) / 2;
+}
+
 async function query(
   token: string,
   apiName: string,
@@ -206,13 +221,15 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     ["399006.SZ", "创业板指"],
   ] as const;
 
-  const [dailyBasic, moneyflow, forecast, funds, futures, ...indexResults] =
+  const [dailyBasic, moneyflow, forecast, funds, futures, stockBasic, swDaily, ...indexResults] =
     await Promise.all([
       query(token, "daily_basic", { trade_date: tradeDate }, "ts_code,trade_date,total_mv,pe_ttm,pb"),
       query(token, "moneyflow", { trade_date: tradeDate }, "ts_code,trade_date,net_mf_amount"),
       query(token, "forecast", { ann_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
       query(token, "fund_daily", { trade_date: tradeDate }, "ts_code,trade_date,close,pct_chg,amount"),
       query(token, "fut_daily", { trade_date: tradeDate, exchange: "CFFEX" }, "ts_code,trade_date,close,settle,vol,oi"),
+      query(token, "stock_basic", { list_status: "L" }, "ts_code,name,industry,market,list_date"),
+      query(token, "sw_daily", { start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,name,close,pct_change,pe,pb"),
       ...indexDefinitions.map(([tsCode]) =>
         query(token, "index_daily", { ts_code: tsCode, start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,close,pct_chg"),
       ),
@@ -240,11 +257,67 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     ? moneyflow.rows.reduce((sum, row) => sum + number(row.net_mf_amount), 0) / 10_000
     : null;
 
+  const securityNames = new Map(stockBasic.rows.map(row => [String(row.ts_code), String(row.name || row.ts_code)]));
+  const dailyChanges = new Map(daily.rows.map(row => [String(row.ts_code), number(row.pct_chg)]));
+  const peValues = dailyBasic.rows.map(row => number(row.pe_ttm)).filter(value => value > 0 && value < 1_000);
+  const pbValues = dailyBasic.rows.map(row => number(row.pb)).filter(value => value > 0 && value < 100);
+  const industriesByCode = new Map<string, Record<string, unknown>[]>();
+  for (const row of swDaily.rows) {
+    const code = String(row.ts_code);
+    industriesByCode.set(code, [...(industriesByCode.get(code) ?? []), row]);
+  }
+  const industries = [...industriesByCode.entries()].flatMap(([code, rows]) => {
+    const history = [...rows].sort((left, right) => String(left.trade_date).localeCompare(String(right.trade_date)));
+    const latest = history.at(-1);
+    if (!latest) return [];
+    const close = number(latest.close);
+    const periodReturn = (days: number) => {
+      const anchor = history.at(-(days + 1));
+      const anchorClose = number(anchor?.close);
+      return anchorClose > 0 ? (close / anchorClose - 1) * 100 : null;
+    };
+    return [{
+      code,
+      name: String(latest.name || code),
+      close,
+      pctChange: number(latest.pct_change),
+      return20d: periodReturn(20),
+      return60d: periodReturn(60),
+      pe: optionalNumber(latest.pe),
+      pb: optionalNumber(latest.pb),
+    }];
+  }).sort((left, right) => (right.return20d ?? -Infinity) - (left.return20d ?? -Infinity));
+  const flows = moneyflow.rows.map(row => ({
+    code: String(row.ts_code),
+    name: securityNames.get(String(row.ts_code)) ?? String(row.ts_code),
+    pctChange: dailyChanges.get(String(row.ts_code)) ?? 0,
+    netAmountYi: number(row.net_mf_amount) / 10_000,
+  })).sort((left, right) => Math.abs(right.netAmountYi) - Math.abs(left.netAmountYi)).slice(0, 30);
+  const events = forecast.rows.map(row => ({
+    code: String(row.ts_code),
+    name: securityNames.get(String(row.ts_code)) ?? String(row.ts_code),
+    announcedAt: String(row.ann_date || ""),
+    endDate: String(row.end_date || ""),
+    type: String(row.type || "业绩预告"),
+    changeMin: optionalNumber(row.p_change_min),
+    changeMax: optionalNumber(row.p_change_max),
+  })).slice(0, 30);
+  const instruments = (rows: Record<string, unknown>[], includeOpenInterest: boolean) => rows
+    .map(row => ({
+      code: String(row.ts_code),
+      close: number(row.close),
+      pctChange: optionalNumber(row.pct_chg),
+      amountYi: optionalNumber(row.amount) === null ? null : number(row.amount) / 100_000,
+      openInterest: includeOpenInterest ? optionalNumber(row.oi) : null,
+    }))
+    .sort((left, right) => (right.amountYi ?? right.openInterest ?? 0) - (left.amountYi ?? left.openInterest ?? 0))
+    .slice(0, 30);
+
   const moduleResults: Record<string, ModuleState> = {
     行情: { status: "live", records: daily.rows.length, message: `最新交易日 ${tradeDate}` },
     财务: moduleState(dailyBasic, "日频估值截面已更新"),
     指数行业: indexes.length
-      ? { status: indexes.length === indexDefinitions.length ? "live" : "partial", records: indexes.length, message: "核心指数已更新；行业成员沿用最近版本" }
+      ? { status: indexes.length === indexDefinitions.length && industries.length ? "live" : "partial", records: indexes.length + industries.length, message: industries.length ? `${industries.length} 个申万行业与核心指数已更新` : "核心指数已更新；行业行情暂缺" }
       : { status: "unavailable", records: 0, message: "核心指数接口不可用" },
     资金: moduleState(moneyflow, "个股资金流已聚合"),
     事件预期: moduleState(forecast, "近30日业绩预告已更新"),
@@ -278,6 +351,8 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     forecast.error,
     funds.error,
     futures.error,
+    stockBasic.error,
+    swDaily.error,
     ...indexResults.map(result => result.error),
   ].filter((message): message is string => Boolean(message));
   const hasUnavailable =
@@ -292,6 +367,18 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     market,
     indexes,
     periods,
+    domains: {
+      industries,
+      valuation: {
+        medianPeTtm: median(peValues),
+        medianPb: median(pbValues),
+        profitablePeCoverage: dailyBasic.rows.length ? peValues.length / dailyBasic.rows.length : 0,
+      },
+      flows,
+      events,
+      futures: instruments(futures.rows, true),
+      funds: instruments(funds.rows, false),
+    },
     modules: moduleResults,
     quality: { score: qualityScore, checks },
     errors,

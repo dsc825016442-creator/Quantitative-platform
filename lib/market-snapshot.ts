@@ -32,6 +32,42 @@ export type QualityCheck = {
   detail: string;
 };
 
+export type IndustrySnapshot = {
+  code: string;
+  name: string;
+  close: number;
+  pctChange: number;
+  return20d: number | null;
+  return60d: number | null;
+  pe: number | null;
+  pb: number | null;
+};
+
+export type SecurityFlowSnapshot = {
+  code: string;
+  name: string;
+  pctChange: number;
+  netAmountYi: number;
+};
+
+export type EventSnapshot = {
+  code: string;
+  name: string;
+  announcedAt: string;
+  endDate: string;
+  type: string;
+  changeMin: number | null;
+  changeMax: number | null;
+};
+
+export type InstrumentSnapshot = {
+  code: string;
+  close: number;
+  pctChange: number | null;
+  amountYi: number | null;
+  openInterest: number | null;
+};
+
 export type MarketSnapshot = {
   generatedAt: string;
   tradeDate: string;
@@ -49,6 +85,18 @@ export type MarketSnapshot = {
   };
   indexes: IndexSnapshot[];
   periods: Record<"今日" | "20日" | "60日", PeriodSnapshot>;
+  domains: {
+    industries: IndustrySnapshot[];
+    valuation: {
+      medianPeTtm: number | null;
+      medianPb: number | null;
+      profitablePeCoverage: number;
+    };
+    flows: SecurityFlowSnapshot[];
+    events: EventSnapshot[];
+    futures: InstrumentSnapshot[];
+    funds: InstrumentSnapshot[];
+  };
   modules: Record<string, ModuleState>;
   quality: {
     score: number;

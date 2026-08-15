@@ -189,22 +189,78 @@ export default function Home() {
       };
     }
     if (capability === "财务") {
+      const valuation = snapshot.domains?.valuation;
       return {
         ...common,
         metrics: [
           { label: "估值记录", value: state?.records.toLocaleString("zh-CN") ?? "0", note: "daily_basic" },
           { label: "总市值", value: snapshot.market.totalMarketValueYi == null ? "权限不足" : `${(snapshot.market.totalMarketValueYi / 10_000).toFixed(1)}万亿`, note: "全A汇总" },
-          ...base.metrics.slice(2),
+          { label: "PE(TTM)中位数", value: valuation?.medianPeTtm == null ? "暂无" : valuation.medianPeTtm.toFixed(2), note: "仅统计正值" },
+          { label: "PB中位数", value: valuation?.medianPb == null ? "暂无" : valuation.medianPb.toFixed(2), note: `有效 PE 覆盖 ${((valuation?.profitablePeCoverage ?? 0) * 100).toFixed(1)}%` },
         ],
+        rows: valuation ? [
+          ["全A PE(TTM) 中位数", valuation.medianPeTtm?.toFixed(2) ?? "暂无", "当日截面", "剔除负值与异常值", "daily_basic"],
+          ["全A PB 中位数", valuation.medianPb?.toFixed(2) ?? "暂无", "当日截面", "剔除非正值", "daily_basic"],
+          ["盈利公司 PE 覆盖", `${(valuation.profitablePeCoverage * 100).toFixed(1)}%`, "当日截面", "正 PE / 估值记录", "daily_basic"],
+        ] : base.rows,
+      };
+    }
+    if (capability === "指数行业" && snapshot.domains?.industries?.length) {
+      const industryRows = snapshot.domains.industries.slice(0, 12);
+      return {
+        ...common,
+        metrics: [
+          { label: "行业行情", value: snapshot.domains.industries.length.toLocaleString("zh-CN"), note: "申万指数" },
+          { label: "20日最强", value: industryRows[0]?.name ?? "暂无", note: industryRows[0]?.return20d == null ? "暂无" : signed(industryRows[0].return20d) },
+          { label: "当日上涨", value: String(snapshot.domains.industries.filter(item => item.pctChange > 0).length), note: "行业数量" },
+          { label: "真实窗口", value: "20 / 60日", note: "交易日收盘价" },
+        ],
+        columns: ["申万行业", "当日涨跌", "20日收益", "60日收益", "PE / PB"],
+        rows: industryRows.map(item => [item.name, signed(item.pctChange), item.return20d == null ? "暂无" : signed(item.return20d), item.return60d == null ? "暂无" : signed(item.return60d), `${item.pe?.toFixed(1) ?? "—"} / ${item.pb?.toFixed(2) ?? "—"}`]),
       };
     }
     if (capability === "资金") {
+      const flowRows = snapshot.domains?.flows ?? [];
       return {
         ...common,
         metrics: [
           { label: "资金净额", value: snapshot.market.netMoneyflowYi == null ? "权限不足" : signed(snapshot.market.netMoneyflowYi, 1, "亿"), note: "moneyflow 聚合" },
           { label: "覆盖记录", value: state?.records.toLocaleString("zh-CN") ?? "0", note: "最新交易日" },
           ...base.metrics.slice(2),
+        ],
+        columns: ["标的", "资金净额", "当日涨跌", "方向", "来源"],
+        rows: flowRows.slice(0, 12).map(item => [item.name, signed(item.netAmountYi, 2, "亿"), signed(item.pctChange), item.netAmountYi >= 0 ? "净流入" : "净流出", "moneyflow"]),
+      };
+    }
+    if (capability === "事件预期" && snapshot.domains?.events) {
+      const eventRows = snapshot.domains.events;
+      return {
+        ...common,
+        metrics: [
+          { label: "当日预告", value: eventRows.length.toLocaleString("zh-CN"), note: "forecast" },
+          { label: "预增", value: String(eventRows.filter(item => (item.changeMax ?? 0) > 0).length), note: "最大变动为正" },
+          { label: "信号延迟", value: "T+1", note: "禁止当日偷看" },
+          { label: "信息日期", value: formatTradeDate(snapshot.tradeDate), note: "公告日" },
+        ],
+        columns: ["公司", "预告类型", "变动区间", "报告期", "公告日"],
+        rows: eventRows.slice(0, 12).map(item => [item.name, item.type, `${item.changeMin?.toFixed(1) ?? "—"}% → ${item.changeMax?.toFixed(1) ?? "—"}%`, formatTradeDate(item.endDate), formatTradeDate(item.announcedAt)]),
+      };
+    }
+    if (capability === "期货基金" && snapshot.domains) {
+      const futuresRows = snapshot.domains.futures ?? [];
+      const fundRows = snapshot.domains.funds ?? [];
+      return {
+        ...common,
+        metrics: [
+          { label: "期货合约", value: futuresRows.length.toLocaleString("zh-CN"), note: "CFFEX 活跃截面" },
+          { label: "基金行情", value: state?.records ? String(Math.max(0, state.records - futuresRows.length)) : String(fundRows.length), note: "fund_daily" },
+          { label: "期货持仓", value: futuresRows.reduce((sum, item) => sum + (item.openInterest ?? 0), 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 }), note: "展示合约合计" },
+          { label: "基金样本", value: String(fundRows.length), note: "按成交额 Top30" },
+        ],
+        columns: ["品种 / 基金", "收盘", "涨跌", "成交额", "分类"],
+        rows: [
+          ...futuresRows.slice(0, 6).map(item => [item.code, item.close.toFixed(2), item.pctChange == null ? "—" : signed(item.pctChange), item.openInterest?.toLocaleString("zh-CN") ?? "—", "中金所期货"]),
+          ...fundRows.slice(0, 6).map(item => [item.code, item.close.toFixed(3), item.pctChange == null ? "—" : signed(item.pctChange), item.amountYi == null ? "—" : `${item.amountYi.toFixed(2)}亿`, "场内基金"]),
         ],
       };
     }

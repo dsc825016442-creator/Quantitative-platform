@@ -57,6 +57,10 @@ test("keeps tabs, periods, filters and disclosures interactive", async () => {
   assert.match(page, /核心指数已按真实交易日重算/);
   assert.match(page, /snapshot\?\.periods/);
   assert.match(page, /snapshot\?\.quality/);
+  assert.match(page, /snapshot\.domains\?\.industries/);
+  assert.match(page, /snapshot\.domains\?\.flows/);
+  assert.match(page, /snapshot\.domains\?\.events/);
+  assert.match(page, /snapshot\.domains\.futures/);
 });
 
 test("protects and schedules the production market refresh", async () => {
