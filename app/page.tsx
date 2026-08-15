@@ -16,6 +16,51 @@ const regimes = [
   { key: "小登", tone: "gold", move: -1.19, heat: 25.5, flow: -386.95, win: "1 / 6", best: "通信设备 +0.39%", worst: "游戏 -1.91%", desc: "主题弹性最大，对流动性与产业催化最敏感", inflow: "天孚通信 +18.6亿　景旺电子 +6.9亿　锐捷网络 +6.7亿", outflow: "长鑫科技 -23.4亿　中际旭创 -21.5亿　兆易创新 -18.4亿" },
 ];
 
+const capabilityOrder = ["行情", "财务", "指数行业", "资金", "事件预期", "期货基金"] as const;
+type CapabilityKey = typeof capabilityOrder[number];
+const capabilityData: Record<CapabilityKey, {
+  kicker: string; title: string; description: string; status: string; tone: string;
+  metrics: { label: string; value: string; note: string }[];
+  endpoints: string[]; columns: string[]; rows: string[][]; note: string;
+}> = {
+  "行情": {
+    kicker: "MARKET / DAILY", title: "日线行情与市场温度", description: "统一股票、指数、ETF 的收盘行情、复权、估值与交易状态，形成所有研究模块的价格底座。", status: "日频可生产", tone: "green",
+    metrics: [{label:"覆盖证券",value:"5,400+",note:"沪深京 A 股"},{label:"更新频率",value:"T+0",note:"收盘后 15–17 时"},{label:"回看窗口",value:"全历史",note:"停牌日不生成行情"},{label:"质量规则",value:"8 项",note:"复权/停牌/涨跌停"}],
+    endpoints:["daily","adj_factor","daily_basic","index_daily","fund_daily","trade_cal"], columns:["观察标的","收盘 / 点位","日涨跌","20日状态","数据口径"],
+    rows:[["沪深300","4,081.26","-1.27%","弱于60日线","index_daily"],["中证红利","6,442.81","-0.82%","热度84.8%","index_daily"],["创业板指","2,918.74","-1.19%","波动抬升","index_daily"],["全A成交额","18,642亿","-6.4%","缩量","daily 汇总"]], note:"当前页面为研究快照；正式接入后显示真实交易日、更新时间和原始批次号。"
+  },
+  "财务": {
+    kicker:"FUNDAMENTALS / PIT", title:"点时财务与质量因子", description:"按公告可见时间组织三张财务报表、业绩快报与预告，避免用修订后的财务数据回填历史判断。", status:"日频可生产", tone:"blue",
+    metrics:[{label:"报表类型",value:"3+2",note:"三表/快报/预告"},{label:"时间口径",value:"PIT",note:"公告日可见"},{label:"核心因子",value:"24",note:"质量/成长/估值"},{label:"异常检查",value:"6 项",note:"单位/跳变/缺失"}],
+    endpoints:["income","balancesheet","cashflow","fina_indicator","forecast","express"], columns:["指标","当前截面","环比变化","研究解释","来源"],
+    rows:[["全A盈利上调广度","52.8%","+3.1pct","温和改善","forecast / express"],["ROE 中位数","7.6%","+0.2pct","质量稳定","fina_indicator"],["经营现金流覆盖","0.91x","-0.04x","需观察","cashflow"],["低估值分位","68.4%","+5.2pct","价值占优","daily_basic"]], note:"必须同时保存 end_date、ann_date、f_ann_date；任何指标都只在公告可见后的下一交易日进入信号。"
+  },
+  "指数行业": {
+    kicker:"INDEX / SW2021", title:"指数、行业与时点成员", description:"用申万 2021 分类及成员进出日期重建历史行业归属，为轮动、广度与归因提供无幸存者偏差的截面。", status:"31 行业可生产", tone:"violet",
+    metrics:[{label:"一级行业",value:"31",note:"申万 SW2021"},{label:"成员记录",value:"5,900+",note:"含进出日期"},{label:"轮动窗口",value:"20日",note:"可切换 5/60/120"},{label:"审计覆盖",value:"100%",note:"成分版本化"}],
+    endpoints:["index_classify","index_member_all","index_weight","sw_daily","index_dailybasic"], columns:["申万一级","20日收益","热度分位","上涨广度","轮动判断"],
+    rows:[["银行","+4.82%","84","23 / 42","防御主线"],["通信","+2.31%","67","61 / 118","主题扩散"],["医药生物","+1.08%","71","88 / 154","底部改善"],["有色金属","-6.74%","18","9 / 74","周期降温"]], note:"历史回测必须使用 in_date / out_date；当日行业归属和指数权重均保留独立版本。"
+  },
+  "资金": {
+    kicker:"FLOW / BEHAVIOR", title:"成交方向与拥挤度", description:"将个股资金流、大宗交易、融资融券与龙虎榜组合成交易行为观察，不把供应商算法口径误称为真实资金迁移。", status:"盘后可研究", tone:"gold",
+    metrics:[{label:"资金净额",value:"-462.9亿",note:"三篮子合计"},{label:"融资余额",value:"1.91万亿",note:"市场汇总"},{label:"异常成交",value:"42",note:"龙虎榜/大宗"},{label:"口径标签",value:"已标注",note:"算法估算"}],
+    endpoints:["moneyflow","moneyflow_ths","margin","margin_detail","top_list","block_trade"], columns:["标的","净流入","大单占比","同步信号","风险提示"],
+    rows:[["天孚通信","+18.6亿","12.4%","龙虎榜活跃","拥挤上升"],["农业银行","+8.1亿","6.8%","融资平稳","低波动"],["中际旭创","-21.5亿","-14.1%","高换手","分歧放大"],["长鑫科技","-23.4亿","-16.7%","大额卖出","事件核验"]], note:"资金流为成交拆单模型估算；页面、导出与 AI 结论中都必须保留供应商与算法口径说明。"
+  },
+  "事件预期": {
+    kicker:"EVENT / EXPECTATION", title:"公告事件与盈利预期修正", description:"把业绩预告、快报、披露计划和卖方盈利预测放在同一时间轴，识别信息到达后的行业扩散。", status:"核心接口已实测", tone:"red",
+    metrics:[{label:"研报样本",value:"741",note:"3日实测记录"},{label:"行业映射",value:"31",note:"时点化聚合"},{label:"信号延迟",value:"T+1",note:"禁止当日偷看"},{label:"预期窗口",value:"20/60/120",note:"交易日"}],
+    endpoints:["report_rc","forecast","express","disclosure_date","anns_d","stk_surv"], columns:["事件 / 行业","方向","覆盖","信息日期","证据状态"],
+    rows:[["电子 · 盈利预测","上调","36 家","2026-08-13","多券商一致"],["医药 · 业绩预告","改善","22 家","2026-08-13","公告可追溯"],["有色 · 盈利预测","下调","18 家","2026-08-12","扩散中"],["银行 · 中报披露","中性","14 家","2026-08-12","等待正文"]], note:"同券商、同股票、同预测期前后比较；先在股票内平均券商，再聚合到当时有效行业。"
+  },
+  "期货基金": {
+    kicker:"MULTI-ASSET / FOF", title:"期货期限结构与基金基础", description:"用合约、结算价、持仓量和基金净值/份额构建大类资产状态、基差、ETF 申赎及 FOF 观察。", status:"日频可研究", tone:"cyan",
+    metrics:[{label:"期货交易所",value:"5",note:"商品/金融期货"},{label:"曲线字段",value:"结算+OI",note:"近远月可构造"},{label:"基金基础",value:"全市场",note:"净值/份额/持仓"},{label:"利率代理",value:"SHIBOR",note:"中债曲线待授权"}],
+    endpoints:["fut_basic","fut_daily","fut_mapping","fund_basic","fund_nav","fund_share"], columns:["资产","观察值","结构信号","流动性","研究用途"],
+    rows:[["沪深300期指","贴水 0.42%","谨慎","高","指数×基差"],["豆粕期限结构","年化 +5.8%","Back","高","商品 Carry"],["黄金 ETF","份额 +1.7%","净申购","高","避险需求"],["红利 ETF","份额 +0.9%","净申购","中高","FOF 风格"]], note:"连续合约只用于研究展示；交易信号必须映射到当日真实可交易合约，并处理换月与交割窗口。"
+  }
+};
+
 function MiniLine() {
   return <svg viewBox="0 0 520 92" className="mini-line" aria-label="近20日市场热度趋势"><path d="M5 61 C38 57 60 25 94 33 S153 78 185 46 S243 19 277 34 S335 68 371 48 S433 73 474 43 S505 29 516 37"/><line x1="0" y1="70" x2="520" y2="70"/><circle cx="516" cy="37" r="4"/></svg>;
 }
@@ -25,7 +70,9 @@ export default function Home() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [fresh, setFresh] = useState(false);
   const [query, setQuery] = useState("");
+  const [capability, setCapability] = useState<CapabilityKey>("行情");
   const filtered = useMemo(() => industries.filter(i => i.n.includes(query.trim())), [query]);
+  const cap = capabilityData[capability];
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -48,6 +95,19 @@ export default function Home() {
           <section className="hero-grid">
             <div><p className="eyebrow">MARKET REGIME / TUSHARE</p><h1>今日是老钱在动，<br/>还是新钱在动？</h1><p className="lead">把风格、行业、资金与事件证据放在同一张研究桌上，先判断市场由谁驱动，再决定组合该向哪里倾斜。</p></div>
             <div className="signal-panel"><div className="signal-head"><span>市场热度轨迹</span><strong>偏防御</strong></div><MiniLine/><div className="signal-metrics"><span><b>84.8%</b>老登热度</span><span><b>-462.9亿</b>三组资金净额</span><span><b>31</b>申万一级行业</span></div></div>
+          </section>
+
+          <section className="data-console" id="tushare-console">
+            <div className="console-title"><div><span className="section-index">TUSHARE CORE / 06 MODULES</span><h2>Tushare 数据工作台</h2><p>从接口覆盖走到研究结论：每个模块都带数据状态、关键指标、端点血缘和口径提醒。</p></div><div className="console-health"><i/><span>6 个模块</span><b>主骨架就绪</b><small>演示快照 · 待接服务端增量</small></div></div>
+            <div className="cap-tabs" role="tablist" aria-label="Tushare 数据模块">{capabilityOrder.map(item=><button role="tab" aria-selected={capability===item} className={capability===item?"active":""} onClick={()=>setCapability(item)} key={item}><span>{String(capabilityOrder.indexOf(item)+1).padStart(2,"0")}</span>{item}</button>)}</div>
+            <div className={`cap-panel ${cap.tone}`}>
+              <div className="cap-intro"><div><span>{cap.kicker}</span><h3>{cap.title}</h3><p>{cap.description}</p></div><b>{cap.status}</b></div>
+              <div className="cap-metrics">{cap.metrics.map(metric=><article key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.note}</small></article>)}</div>
+              <div className="endpoint-line"><span>接口血缘</span>{cap.endpoints.map(endpoint=><code key={endpoint}>{endpoint}</code>)}</div>
+              <div className="cap-table"><div className="cap-tr cap-th">{cap.columns.map(column=><span key={column}>{column}</span>)}</div>{cap.rows.map((row,index)=><div className="cap-tr" key={row[0]}>{row.map((cell,i)=><span key={`${index}-${i}`} className={i===0?"row-title":""}>{cell}</span>)}</div>)}</div>
+              <div className="quality-note"><b>口径提醒</b><p>{cap.note}</p><button onClick={()=>setFresh(v=>!v)}>{fresh?"快照已标记":"标记待刷新"}</button></div>
+            </div>
+            <div className="pipeline"><span><i className="ok"/>原始层 <b>RAW</b></span><em>→</em><span><i className="ok"/>清洗层 <b>NORMALIZED</b></span><em>→</em><span><i className="ok"/>点时层 <b>PIT</b></span><em>→</em><span><i/>指标层 <b>FEATURES</b></span><em>→</em><span><i/>页面层 <b>SERVING</b></span></div>
           </section>
 
           <section className="block">
