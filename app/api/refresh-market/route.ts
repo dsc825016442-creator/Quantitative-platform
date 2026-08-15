@@ -6,7 +6,25 @@ import { buildMarketSnapshot } from "../../../lib/tushare";
 
 export const dynamic = "force-dynamic";
 
-type RuntimeEnv = typeof env & { TUSHARE_TOKEN?: string };
+type RuntimeEnv = typeof env & {
+  TUSHARE_TOKEN?: string;
+  REFRESH_SECRET?: string;
+};
+
+async function secretsEqual(provided: string, expected: string) {
+  const encoder = new TextEncoder();
+  const [providedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const left = new Uint8Array(providedHash);
+  const right = new Uint8Array(expectedHash);
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left[index] ^ right[index];
+  }
+  return difference === 0;
+}
 
 function chinaClock(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -25,11 +43,18 @@ function chinaClock(date = new Date()) {
   };
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
-    const token = (env as RuntimeEnv).TUSHARE_TOKEN;
-    if (!token) {
-      return Response.json({ ok: false, error: "TUSHARE_TOKEN is not configured" }, { status: 503 });
+    const runtimeEnv = env as RuntimeEnv;
+    const token = runtimeEnv.TUSHARE_TOKEN;
+    const refreshSecret = runtimeEnv.REFRESH_SECRET;
+    if (!token || !refreshSecret) {
+      return Response.json({ ok: false, error: "refresh secrets are not configured" }, { status: 503 });
+    }
+    const authorization = request.headers.get("authorization") ?? "";
+    const providedSecret = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    if (!providedSecret || !(await secretsEqual(providedSecret, refreshSecret))) {
+      return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
     const db = getDb();

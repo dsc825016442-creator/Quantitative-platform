@@ -56,3 +56,19 @@ test("keeps tabs, periods, filters and disclosures interactive", async () => {
   assert.match(page, /expanded === "factor"/);
   assert.match(page, /指标、表格、样本数和排序已按/);
 });
+
+test("protects and schedules the production market refresh", async () => {
+  const [route, workflow] = await Promise.all([
+    readFile(new URL("../app/api/refresh-market/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/daily-market-refresh.yml", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(route, /REFRESH_SECRET/);
+  assert.match(route, /authorization/);
+  assert.match(route, /secretsEqual/);
+  assert.match(route, /status: 401/);
+  assert.match(workflow, /timezone: "Asia\/Shanghai"/);
+  assert.match(workflow, /cron: "30 18 \* \* \*"/);
+  assert.match(workflow, /secrets\.REFRESH_SECRET/);
+  assert.doesNotMatch(workflow, /TUSHARE_TOKEN/);
+});

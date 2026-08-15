@@ -1,0 +1,30 @@
+name: Daily market refresh
+
+on:
+  schedule:
+    - cron: "30 18 * * *"
+      timezone: "Asia/Shanghai"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-market-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refresh Tushare snapshot
+        env:
+          REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
+          REFRESH_URL: https://market-research-notebook-cn.marciayang-lin.chatgpt.site/api/refresh-market
+        run: |
+          response=$(curl --silent --show-error --fail-with-body \
+            --request POST \
+            --header "authorization: Bearer ${REFRESH_SECRET}" \
+            "${REFRESH_URL}")
+          printf '%s\n' "${response}"
