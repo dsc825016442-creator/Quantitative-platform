@@ -221,7 +221,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     ["399006.SZ", "创业板指"],
   ] as const;
 
-  const [dailyBasic, moneyflow, forecast, funds, futures, stockBasic, swClassify, swDaily, financials, ...indexResults] =
+  const [dailyBasic, moneyflow, forecast, funds, futures, stockBasic, swClassify, swDaily, ...indexResults] =
     await Promise.all([
       query(token, "daily_basic", { trade_date: tradeDate }, "ts_code,trade_date,total_mv,pe_ttm,pb"),
       query(token, "moneyflow", { trade_date: tradeDate }, "ts_code,trade_date,net_mf_amount"),
@@ -231,11 +231,27 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
       query(token, "stock_basic", { list_status: "L" }, "ts_code,name,industry,market,list_date"),
       query(token, "index_classify", { level: "L1", src: "SW2021" }, "index_code,industry_name,level,industry_code,is_pub"),
       query(token, "sw_daily", { start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,name,close,pct_change,pe,pb"),
-      query(token, "fina_indicator", { start_date: dateDaysAgo(30), end_date: tradeDate }, "ts_code,ann_date,end_date,roe,grossprofit_margin,debt_to_assets,ocf_to_or"),
       ...indexDefinitions.map(([tsCode]) =>
         query(token, "index_daily", { ts_code: tsCode, start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,close,pct_chg"),
       ),
     ]);
+
+  const representativeCodes = [...dailyBasic.rows]
+    .sort((left, right) => number(right.total_mv) - number(left.total_mv))
+    .slice(0, 20)
+    .map(row => String(row.ts_code));
+  const financialQueryResults = await Promise.all(representativeCodes.map(tsCode =>
+    query(token, "fina_indicator", { ts_code: tsCode, start_date: dateDaysAgo(730), end_date: tradeDate }, "ts_code,ann_date,end_date,roe,grossprofit_margin,debt_to_assets,ocf_to_or"),
+  ));
+  const financialRows = financialQueryResults.flatMap(result => {
+    const latest = [...result.rows].sort((left, right) => String(right.ann_date).localeCompare(String(left.ann_date)))[0];
+    return latest ? [latest] : [];
+  });
+  const financialErrors = financialQueryResults.map(result => result.error).filter((message): message is string => Boolean(message));
+  const financials: QueryResult = {
+    rows: financialRows,
+    error: financialRows.length ? null : financialErrors[0] ?? null,
+  };
 
   const indexes = indexResults.flatMap((result, index) => {
     const row = [...result.rows].sort((left, right) =>
