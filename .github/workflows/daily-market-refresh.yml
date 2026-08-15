@@ -22,9 +22,17 @@ jobs:
         env:
           REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
           REFRESH_URL: https://market-research-notebook-cn.marciayang-lin.chatgpt.site/api/refresh-market
+          FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          response=$(curl --silent --show-error --fail-with-body \
-            --request POST \
-            --header "authorization: Bearer ${REFRESH_SECRET}" \
-            "${REFRESH_URL}")
-          printf '%s\n' "${response}"
+          for attempt in 1 2 3; do
+            if response=$(curl --silent --show-error --fail-with-body \
+              --request POST \
+              --header "authorization: Bearer ${REFRESH_SECRET}" \
+              --header "x-refresh-force: ${FORCE_REFRESH}" \
+              "${REFRESH_URL}"); then
+              printf '%s\n' "${response}"
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          exit 1

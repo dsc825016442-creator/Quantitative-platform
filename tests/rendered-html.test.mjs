@@ -54,7 +54,9 @@ test("keeps tabs, periods, filters and disclosures interactive", async () => {
   assert.match(page, /expanded === "components"/);
   assert.match(page, /expanded === "rotation"/);
   assert.match(page, /expanded === "factor"/);
-  assert.match(page, /指标、表格、样本数和排序已按/);
+  assert.match(page, /核心指数已按真实交易日重算/);
+  assert.match(page, /snapshot\?\.periods/);
+  assert.match(page, /snapshot\?\.quality/);
 });
 
 test("protects and schedules the production market refresh", async () => {
@@ -70,5 +72,7 @@ test("protects and schedules the production market refresh", async () => {
   assert.match(workflow, /timezone: "Asia\/Shanghai"/);
   assert.match(workflow, /cron: "30 18 \* \* \*"/);
   assert.match(workflow, /secrets\.REFRESH_SECRET/);
+  assert.match(workflow, /for attempt in 1 2 3/);
+  assert.match(workflow, /x-refresh-force/);
   assert.doesNotMatch(workflow, /TUSHARE_TOKEN/);
 });

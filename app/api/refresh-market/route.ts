@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
-import { marketSnapshots } from "../../../db/schema";
+import { marketSnapshots, refreshRuns } from "../../../db/schema";
 import { buildMarketSnapshot } from "../../../lib/tushare";
 
 export const dynamic = "force-dynamic";
@@ -64,43 +64,75 @@ export async function POST(request: Request) {
       .orderBy(desc(marketSnapshots.generatedAt))
       .limit(1);
     const now = chinaClock();
-    if (latest && chinaClock(new Date(latest.generatedAt)).date === now.date) {
+    const force = request.headers.get("x-refresh-force") === "true";
+    if (!force && latest && chinaClock(new Date(latest.generatedAt)).date === now.date) {
       return Response.json({ ok: true, updated: false, reason: "already_refreshed_today", tradeDate: latest.tradeDate });
     }
-    if (latest && now.minutes < 18 * 60 + 25) {
+    if (!force && latest && now.minutes < 18 * 60 + 25) {
       return Response.json({ ok: false, error: "daily refresh window opens at 18:25 Asia/Shanghai" }, { status: 425 });
     }
-    const snapshot = await buildMarketSnapshot(token);
+    const startedAt = new Date().toISOString();
+    const [run] = await db.insert(refreshRuns).values({
+      startedAt,
+      status: "running",
+      message: force ? "manual forced refresh" : "scheduled refresh",
+    }).returning({ id: refreshRuns.id });
 
-    if (latest?.tradeDate === snapshot.tradeDate && latest.status === "live" && snapshot.status !== "live") {
-      return Response.json({ ok: true, updated: false, reason: "kept_more_complete_snapshot", tradeDate: latest.tradeDate });
+    try {
+      const snapshot = await buildMarketSnapshot(token);
+
+      if (latest?.tradeDate === snapshot.tradeDate && latest.status === "live" && snapshot.status !== "live") {
+        await db.update(refreshRuns).set({
+          finishedAt: new Date().toISOString(),
+          status: "skipped",
+          tradeDate: latest.tradeDate,
+          message: "kept more complete snapshot",
+          moduleSummary: JSON.stringify(snapshot.modules),
+        }).where(eq(refreshRuns.id, run.id));
+        return Response.json({ ok: true, updated: false, reason: "kept_more_complete_snapshot", tradeDate: latest.tradeDate });
+      }
+
+      const existing = await db
+        .select({ id: marketSnapshots.id })
+        .from(marketSnapshots)
+        .where(eq(marketSnapshots.tradeDate, snapshot.tradeDate))
+        .limit(1);
+      const values = {
+        tradeDate: snapshot.tradeDate,
+        generatedAt: snapshot.generatedAt,
+        status: snapshot.status,
+        payload: JSON.stringify(snapshot),
+      };
+
+      if (existing[0]) {
+        await db.update(marketSnapshots).set(values).where(eq(marketSnapshots.id, existing[0].id));
+      } else {
+        await db.insert(marketSnapshots).values(values);
+      }
+      await db.update(refreshRuns).set({
+        finishedAt: new Date().toISOString(),
+        status: snapshot.status === "live" ? "succeeded" : "partial",
+        tradeDate: snapshot.tradeDate,
+        message: `quality score ${snapshot.quality.score}`,
+        moduleSummary: JSON.stringify(snapshot.modules),
+      }).where(eq(refreshRuns.id, run.id));
+
+      return Response.json({
+        ok: true,
+        updated: true,
+        tradeDate: snapshot.tradeDate,
+        status: snapshot.status,
+        quality: snapshot.quality,
+        modules: snapshot.modules,
+      });
+    } catch (error) {
+      await db.update(refreshRuns).set({
+        finishedAt: new Date().toISOString(),
+        status: "failed",
+        message: error instanceof Error ? error.message : "refresh failed",
+      }).where(eq(refreshRuns.id, run.id));
+      throw error;
     }
-
-    const existing = await db
-      .select({ id: marketSnapshots.id })
-      .from(marketSnapshots)
-      .where(eq(marketSnapshots.tradeDate, snapshot.tradeDate))
-      .limit(1);
-    const values = {
-      tradeDate: snapshot.tradeDate,
-      generatedAt: snapshot.generatedAt,
-      status: snapshot.status,
-      payload: JSON.stringify(snapshot),
-    };
-
-    if (existing[0]) {
-      await db.update(marketSnapshots).set(values).where(eq(marketSnapshots.id, existing[0].id));
-    } else {
-      await db.insert(marketSnapshots).values(values);
-    }
-
-    return Response.json({
-      ok: true,
-      updated: true,
-      tradeDate: snapshot.tradeDate,
-      status: snapshot.status,
-      modules: snapshot.modules,
-    });
   } catch (error) {
     return Response.json({
       ok: false,

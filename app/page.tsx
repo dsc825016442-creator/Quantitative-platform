@@ -103,35 +103,30 @@ const periodMeta: Record<string,{ scale:number; label:string; sample:string; ran
   "60日": { scale:2.08, label:"中周期趋势", sample:"60 个交易日", range:"2026-05-21 → 08-13", character:"更稳定 · 转向较慢" },
 };
 
-function scalePeriodValue(value:string, scale:number) {
-  if (scale === 1) return value;
-  return value
-    .replace(/([+-]?\d+(?:\.\d+)?)(%|pct|σ)/g, (_, number:string, unit:string) => {
-      const scaled = Number(number) * scale;
-      const sign = scaled > 0 && number.startsWith("+") ? "+" : "";
-      return `${sign}${scaled.toFixed(Math.abs(scaled) >= 10 ? 1 : 2)}${unit}`;
-    })
-    .replace(/([+-]\d+(?:\.\d+)?)亿/g, (_, number:string) => {
-      const scaled = Number(number) * scale;
-      return `${scaled > 0 ? "+" : ""}${scaled.toFixed(1)}亿`;
-    });
-}
-
-function ResearchWorkspace({ spec, period, setPeriod, query }:{ spec:TabSpec; period:string; setPeriod:(value:string)=>void; query:string }) {
+function ResearchWorkspace({ spec, tabKey, period, setPeriod, query, periods }:{ spec:TabSpec; tabKey:ResearchTab; period:string; setPeriod:(value:string)=>void; query:string; periods?: MarketSnapshot["periods"] }) {
   const meta = periodMeta[period];
+  const livePeriod = periods?.[period as keyof MarketSnapshot["periods"]];
   const orderedRows = period === "今日" ? spec.rows.slice(0,3) : period === "60日" ? [...spec.rows.slice(2), ...spec.rows.slice(0,2)] : spec.rows;
-  const rows = orderedRows.filter(row => !query.trim() || row.join(" ").includes(query.trim())).map(row => row.map(cell => scalePeriodValue(cell, meta.scale)));
-  const metrics = spec.metrics.map(metric => [metric[0], scalePeriodValue(metric[1], meta.scale), period === "20日" ? metric[2] : `${metric[2]} · ${meta.label}`]);
-  const columns = spec.columns.map(column => column.replace(/20日|当日|今日/g, period));
+  const fallbackRows = orderedRows.filter(row => !query.trim() || row.join(" ").includes(query.trim()));
+  const rows = tabKey === "指数×基差" && livePeriod
+    ? livePeriod.indexes.map(index => [index.name, index.close.toLocaleString("zh-CN", { maximumFractionDigits: 2 }), signed(index.returnPct), signed(index.pctChange), "index_daily"])
+    : fallbackRows;
+  const metrics = livePeriod
+    ? [["核心指数区间", signed(livePeriod.averageReturnPct), `${livePeriod.indexes.length} 个指数真实行情`], ...spec.metrics.slice(0, 3)]
+    : spec.metrics;
+  const columns = tabKey === "指数×基差" && livePeriod
+    ? ["指数", "最新点位", `${period}收益`, "当日涨跌", "来源"]
+    : spec.columns;
+  const range = livePeriod ? `${formatTradeDate(livePeriod.startDate)} → ${formatTradeDate(livePeriod.endDate)}` : meta.range;
   return <section className="research-workspace">
-    <header className="research-hero"><div><span>{spec.kicker}</span><h1>{spec.title}</h1><p>{spec.description}</p></div><div className="research-status"><i/><b>{spec.status}</b><small>{meta.label} · {meta.range}</small></div></header>
-    <div className="research-toolbar"><div>{["今日","20日","60日"].map(item=><button aria-pressed={period===item} className={period===item?"active":""} onClick={()=>setPeriod(item)} key={item}>{item}</button>)}</div><span>当前窗口：<b>{period}</b>　{query ? `筛选：${query}` : "全部标的"}</span></div>
-    <div className="window-strip"><span><b>{meta.sample}</b>样本范围</span><span><b>{meta.range}</b>起止日期</span><span><b>{meta.character}</b>窗口特征</span><span><b>{rows.length} 条</b>当前结果</span></div>
+    <header className="research-hero"><div><span>{spec.kicker}</span><h1>{spec.title}</h1><p>{spec.description}</p></div><div className="research-status"><i/><b>{spec.status}</b><small>{livePeriod ? "真实行情窗口" : meta.label} · {range}</small></div></header>
+    <div className="research-toolbar"><div>{["今日","20日","60日"].map(item=><button aria-pressed={period===item} className={period===item?"active":""} onClick={()=>setPeriod(item)} key={item}>{item}</button>)}</div><span>当前窗口：<b>{period}</b> {query ? `筛选：${query}` : "全部标的"}</span></div>
+    <div className="window-strip"><span><b>{livePeriod ? `${livePeriod.tradingDays} 个交易日` : meta.sample}</b>样本范围</span><span><b>{range}</b>起止日期</span><span><b>{livePeriod?.best ? `${livePeriod.best.name} ${signed(livePeriod.best.returnPct)}` : meta.character}</b>区间最强</span><span><b>{livePeriod?.worst ? `${livePeriod.worst.name} ${signed(livePeriod.worst.returnPct)}` : `${rows.length} 条`}</b>区间最弱</span></div>
     <div className="research-metrics" key={`${spec.title}-${period}`}>{metrics.map(metric=><article key={metric[0]}><span>{metric[0]}</span><strong>{metric[1]}</strong><small>{metric[2]}</small></article>)}</div>
     <div className="research-grid"><article className="research-card main"><div className="research-card-head"><div><span>DETAIL / {period}</span><h2>{period}研究明细</h2></div><b>{rows.length} 条</b></div><div className="research-table"><div className="research-row head">{columns.map(c=><span key={c}>{c}</span>)}</div>{rows.map((row,index)=><div className="research-row" key={`${period}-${row[0]}-${index}`}>{row.map((cell,i)=><span className={i===0?"primary":""} key={`${cell}-${i}`}>{cell}</span>)}</div>)}</div></article>
       <aside className="research-card insights"><div className="research-card-head"><div><span>INTERPRETATION</span><h2>本页结论</h2></div></div><ol>{spec.insights.map((item,index)=><li key={item}><b>{String(index+1).padStart(2,"0")}</b><p>{item}</p></li>)}</ol><div className="evidence-box"><span>数据与证据</span><div>{spec.evidence.map(item=><code key={item}>{item}</code>)}</div></div></aside>
     </div>
-    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>指标、表格、样本数和排序已按 {meta.sample} 重算；当前仍为研究快照。</p></footer>
+    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>{livePeriod ? "核心指数已按真实交易日重算；其他研究维度将在 P1/P2 逐项替换。" : `当前仍为 ${meta.sample} 研究快照。`}</p></footer>
   </section>
 }
 
@@ -143,14 +138,19 @@ export default function Home() {
   const [capability, setCapability] = useState<CapabilityKey>("行情");
   const [period, setPeriod] = useState("20日");
   const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
+  const [latestRun, setLatestRun] = useState<{ status:string; startedAt:string; message:string } | null>(null);
+  const [freshnessHours, setFreshnessHours] = useState<number | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(true);
   useEffect(() => {
     let mounted = true;
-    setSnapshotLoading(true);
     fetch("/api/market-snapshot", { cache: "no-store" })
       .then(response => response.ok ? response.json() : null)
       .then(payload => {
-        if (mounted && payload?.snapshot) setSnapshot(payload.snapshot);
+        if (mounted && payload?.snapshot) {
+          setSnapshot(payload.snapshot);
+          setLatestRun(payload.latestRun ?? null);
+          setFreshnessHours(typeof payload.freshnessHours === "number" ? payload.freshnessHours : null);
+        }
       })
       .finally(() => {
         if (mounted) setSnapshotLoading(false);
@@ -243,7 +243,7 @@ export default function Home() {
           </section>
 
           <section className="data-console" id="tushare-console">
-            <div className="console-title"><div><span className="section-index">TUSHARE CORE / 06 MODULES</span><h2>Tushare 数据工作台</h2><p>从接口覆盖走到研究结论：每个模块都带数据状态、关键指标、端点血缘和口径提醒。</p></div><div className="console-health"><i/><span>每天 18:30</span><b>{snapshot ? "自动快照已接入" : "主骨架就绪"}</b><small>{snapshot ? `交易日 ${asOf} · ${snapshot.errors.length} 项权限提示` : "等待首次自动更新"}</small></div></div>
+            <div className="console-title"><div><span className="section-index">TUSHARE CORE / 06 MODULES</span><h2>Tushare 数据工作台</h2><p>从接口覆盖走到研究结论：每个模块都带数据状态、关键指标、端点血缘和口径提醒。</p></div><div className="console-health"><i/><span>每天 18:30</span><b>{snapshot ? `质量分 ${snapshot.quality?.score ?? "--"}` : "主骨架就绪"}</b><small>{snapshot ? `交易日 ${asOf} · ${freshnessHours == null ? "--" : freshnessHours.toFixed(1)} 小时前` : "等待首次自动更新"}</small></div></div>
             <div className="cap-tabs" role="tablist" aria-label="Tushare 数据模块">{capabilityOrder.map(item=><button role="tab" aria-selected={capability===item} className={capability===item?"active":""} onClick={()=>setCapability(item)} key={item}><span>{String(capabilityOrder.indexOf(item)+1).padStart(2,"0")}</span>{item}</button>)}</div>
             <div className={`cap-panel ${cap.tone}`}>
               <div className="cap-intro"><div><span>{cap.kicker}</span><h3>{cap.title}</h3><p>{cap.description}</p></div><b>{cap.status}</b></div>
@@ -253,6 +253,7 @@ export default function Home() {
               <div className="quality-note"><b>口径提醒</b><p>{cap.note}</p><button onClick={()=>setFresh(v=>!v)}>{fresh?"快照已标记":"标记待刷新"}</button></div>
             </div>
             <div className="pipeline"><span><i className="ok"/>原始层 <b>RAW</b></span><em>→</em><span><i className="ok"/>清洗层 <b>NORMALIZED</b></span><em>→</em><span><i className="ok"/>点时层 <b>PIT</b></span><em>→</em><span><i/>指标层 <b>FEATURES</b></span><em>→</em><span><i/>页面层 <b>SERVING</b></span></div>
+            {snapshot?.quality && <div className="quality-strip"><div><span>DATA QUALITY</span><b>{snapshot.quality.score} / 100</b><small>最近任务：{latestRun?.status ?? "unknown"} · {latestRun?.message ?? "无日志"}</small></div>{snapshot.quality.checks.map(check=><span className={check.status} key={check.id}><i/>{check.label}<small>{check.detail}</small></span>)}</div>}
           </section>
 
           <section className="block">
@@ -278,7 +279,7 @@ export default function Home() {
           <section className="block compact"><button className="section-toggle" onClick={()=>setExpanded(expanded === "factor" ? null : "factor")}><span>{expanded === "factor" ? "▾" : "▸"}</span><b>风格与行业因子明细 · Barra CNE6 纯因子（查阅用）</b><em>部分因子需付费数据</em></button>{expanded === "factor" && <div className="factor-strip"><span>价值 <b>+0.71σ</b></span><span>规模 <b>-0.43σ</b></span><span>动量 <b>-0.28σ</b></span><span>波动 <b>+0.56σ</b></span><span>流动性 <b>-0.19σ</b></span></div>}</section>
 
           <section className="block data-map"><div className="block-head"><div><span className="section-index">02 / DATA MAP</span><h2>数据能力与缺口</h2></div><p>从“可展示”推进到“可复现、可审计、可商用”的最短补数路径。</p></div><div className="capability-grid"><div><span className="cap-tag ready">现有可做</span><h3>Tushare 主骨架</h3><p>日线、财务、指数与成员、行业映射、资金流、公告事件、研报盈利预测、期货与基金基础。</p></div><div><span className="cap-tag free">免费补充</span><h3>盘中与原文证据</h3><p>AKShare、交易所/巨潮公告、央行与统计局；补足实时行情、公告原文、宏观高频与交叉校验。</p></div><div><span className="cap-tag paid">建议付费</span><h3>一致预期与风险模型</h3><p>Wind / iFinD / Choice 等机构数据；补齐点时一致预期、Barra 风险暴露、基金持仓穿透与稳定商用授权。</p></div></div></section>
-          </> : <ResearchWorkspace spec={tabData[active]} period={period} setPeriod={setPeriod} query={query}/>} 
+          </> : <ResearchWorkspace spec={tabData[active]} tabKey={active} period={period} setPeriod={setPeriod} query={query} periods={snapshot?.periods}/>}
         </div>
       </section>
     </main>

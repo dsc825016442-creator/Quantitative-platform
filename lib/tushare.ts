@@ -1,4 +1,9 @@
-import type { MarketSnapshot, ModuleState } from "./market-snapshot";
+import type {
+  MarketSnapshot,
+  ModuleState,
+  PeriodSnapshot,
+  QualityCheck,
+} from "./market-snapshot";
 
 type TushareResponse = {
   code: number;
@@ -88,6 +93,104 @@ function moduleState(result: QueryResult, successMessage: string): ModuleState {
   return { status: "live", records: result.rows.length, message: successMessage };
 }
 
+function buildPeriod(
+  indexDefinitions: readonly (readonly [string, string])[],
+  indexResults: QueryResult[],
+  tradingDays: 0 | 20 | 60,
+  tradeDate: string,
+): PeriodSnapshot {
+  const indexes = indexResults.flatMap((result, index) => {
+    const history = [...result.rows].sort((left, right) =>
+      String(left.trade_date).localeCompare(String(right.trade_date)),
+    );
+    const latest = history.at(-1);
+    if (!latest) return [];
+    const anchor = tradingDays === 0 ? latest : history.at(-(tradingDays + 1));
+    if (!anchor) return [];
+    const latestClose = number(latest.close);
+    const anchorClose = number(anchor.close);
+    const returnPct = tradingDays === 0
+      ? number(latest.pct_chg)
+      : anchorClose > 0
+        ? (latestClose / anchorClose - 1) * 100
+        : 0;
+    return [{
+      code: indexDefinitions[index][0],
+      name: indexDefinitions[index][1],
+      close: latestClose,
+      pctChange: number(latest.pct_chg),
+      returnPct,
+      startDate: String(anchor.trade_date),
+    }];
+  });
+  const ranked = [...indexes].sort((left, right) => right.returnPct - left.returnPct);
+  return {
+    startDate: indexes[0]?.startDate ?? tradeDate,
+    endDate: tradeDate,
+    tradingDays: tradingDays || 1,
+    averageReturnPct: indexes.length
+      ? indexes.reduce((sum, item) => sum + item.returnPct, 0) / indexes.length
+      : 0,
+    best: ranked[0] ?? null,
+    worst: ranked.at(-1) ?? null,
+    indexes: indexes.map(item => ({
+      code: item.code,
+      name: item.name,
+      close: item.close,
+      pctChange: item.pctChange,
+      returnPct: item.returnPct,
+    })),
+  };
+}
+
+function qualityChecks(
+  dailyRows: Record<string, unknown>[],
+  indexes: MarketSnapshot["indexes"],
+  market: MarketSnapshot["market"],
+  moduleResults: Record<string, ModuleState>,
+): QualityCheck[] {
+  const breadthTotal = market.up + market.down + market.flat;
+  const checks: QualityCheck[] = [
+    {
+      id: "daily_coverage",
+      label: "日线覆盖",
+      status: dailyRows.length >= 5_000 ? "pass" : dailyRows.length >= 4_500 ? "warn" : "fail",
+      detail: `${dailyRows.length} 只证券`,
+    },
+    {
+      id: "breadth_balance",
+      label: "涨跌家数守恒",
+      status: breadthTotal === market.securities ? "pass" : "fail",
+      detail: `${breadthTotal} / ${market.securities}`,
+    },
+    {
+      id: "turnover_positive",
+      label: "成交额有效",
+      status: market.amountYi > 0 ? "pass" : "fail",
+      detail: `${market.amountYi.toFixed(0)} 亿元`,
+    },
+    {
+      id: "index_coverage",
+      label: "核心指数覆盖",
+      status: indexes.length === 5 ? "pass" : indexes.length >= 3 ? "warn" : "fail",
+      detail: `${indexes.length} / 5`,
+    },
+    {
+      id: "price_bounds",
+      label: "涨跌幅边界",
+      status: dailyRows.every(row => Math.abs(number(row.pct_chg)) <= 25) ? "pass" : "warn",
+      detail: "检查单日绝对涨跌幅 ≤ 25%",
+    },
+    {
+      id: "module_availability",
+      label: "模块可用性",
+      status: Object.values(moduleResults).every(module => module.status === "live") ? "pass" : "warn",
+      detail: `${Object.values(moduleResults).filter(module => module.status === "live").length} / ${Object.keys(moduleResults).length} 实时`,
+    },
+  ];
+  return checks;
+}
+
 export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot> {
   const daily = await latestDaily(token);
   if (daily.error || !daily.rows.length) {
@@ -107,16 +210,18 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     await Promise.all([
       query(token, "daily_basic", { trade_date: tradeDate }, "ts_code,trade_date,total_mv,pe_ttm,pb"),
       query(token, "moneyflow", { trade_date: tradeDate }, "ts_code,trade_date,net_mf_amount"),
-      query(token, "forecast", { start_date: dateDaysAgo(30), end_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
+      query(token, "forecast", { ann_date: tradeDate }, "ts_code,ann_date,end_date,type,p_change_min,p_change_max"),
       query(token, "fund_daily", { trade_date: tradeDate }, "ts_code,trade_date,close,pct_chg,amount"),
       query(token, "fut_daily", { trade_date: tradeDate, exchange: "CFFEX" }, "ts_code,trade_date,close,settle,vol,oi"),
       ...indexDefinitions.map(([tsCode]) =>
-        query(token, "index_daily", { ts_code: tsCode, trade_date: tradeDate }, "ts_code,trade_date,close,pct_chg"),
+        query(token, "index_daily", { ts_code: tsCode, start_date: dateDaysAgo(120), end_date: tradeDate }, "ts_code,trade_date,close,pct_chg"),
       ),
     ]);
 
   const indexes = indexResults.flatMap((result, index) => {
-    const row = result.rows[0];
+    const row = [...result.rows].sort((left, right) =>
+      String(right.trade_date).localeCompare(String(left.trade_date)),
+    )[0];
     if (!row) return [];
     return [{
       code: indexDefinitions[index][0],
@@ -148,6 +253,25 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
       : { status: futures.error || funds.error ? "partial" : "live", records: futures.rows.length + funds.rows.length, message: `期货 ${futures.rows.length} / 基金 ${funds.rows.length}` },
   };
 
+  const market = {
+    securities: daily.rows.length,
+    up: changes.filter(value => value > 0).length,
+    down: changes.filter(value => value < 0).length,
+    flat: changes.filter(value => value === 0).length,
+    averagePctChange: changes.reduce((sum, value) => sum + value, 0) / changes.length,
+    amountYi: totalAmountYi,
+    totalMarketValueYi,
+    netMoneyflowYi,
+  };
+  const periods = {
+    今日: buildPeriod(indexDefinitions, indexResults, 0, tradeDate),
+    "20日": buildPeriod(indexDefinitions, indexResults, 20, tradeDate),
+    "60日": buildPeriod(indexDefinitions, indexResults, 60, tradeDate),
+  };
+  const checks = qualityChecks(daily.rows, indexes, market, moduleResults);
+  const qualityScore = Math.round(
+    checks.reduce((sum, check) => sum + (check.status === "pass" ? 100 : check.status === "warn" ? 60 : 0), 0) / checks.length,
+  );
   const errors = [
     dailyBasic.error,
     moneyflow.error,
@@ -156,25 +280,20 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     futures.error,
     ...indexResults.map(result => result.error),
   ].filter((message): message is string => Boolean(message));
-  const hasUnavailable = Object.values(moduleResults).some(module => module.status !== "live");
+  const hasUnavailable =
+    Object.values(moduleResults).some(module => module.status !== "live") ||
+    checks.some(check => check.status === "fail");
 
   return {
     generatedAt: new Date().toISOString(),
     tradeDate,
     source: "Tushare Pro",
     status: hasUnavailable ? "partial" : "live",
-    market: {
-      securities: daily.rows.length,
-      up: changes.filter(value => value > 0).length,
-      down: changes.filter(value => value < 0).length,
-      flat: changes.filter(value => value === 0).length,
-      averagePctChange: changes.reduce((sum, value) => sum + value, 0) / changes.length,
-      amountYi: totalAmountYi,
-      totalMarketValueYi,
-      netMoneyflowYi,
-    },
+    market,
     indexes,
+    periods,
     modules: moduleResults,
+    quality: { score: qualityScore, checks },
     errors,
   };
 }
