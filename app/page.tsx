@@ -4,13 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { MarketSnapshot } from "../lib/market-snapshot";
 
 const nav = ["结论", "AI观察", "大类资产", "新闻", "指数×基差", "温度计", "登指数", "纯因子轮动", "大额方向", "判断标尺", "证据链"] as const;
-const industries = [
-  { n: "银行", pct: 1.16, heat: 84, flow: 12.8, breadth: "23 / 42" },
-  { n: "化学制药", pct: 0.54, heat: 71, flow: 8.4, breadth: "88 / 154" },
-  { n: "通信设备", pct: 0.39, heat: 67, flow: 18.6, breadth: "61 / 118" },
-  { n: "电网设备", pct: 0.22, heat: 63, flow: 7.7, breadth: "49 / 108" },
-  { n: "工业金属", pct: -4.2, heat: 18, flow: -21.4, breadth: "9 / 74" },
-];
 const regimes = [
   { key: "老登", tone: "violet", move: -0.82, heat: 84.8, flow: -3.84, win: "2 / 5", best: "国有大型银行 +1.16%", worst: "房地产开发 -2.14%", desc: "低估值、高分红、重资产，对利率与政策预期最敏感", inflow: "农业银行 +8.1亿　贵州茅台 +7.4亿　中国银行 +3.7亿", outflow: "—" },
   { key: "中登", tone: "blue", move: -1.27, heat: 77.7, flow: -72.12, win: "1 / 6", best: "化学制药 +0.54%", worst: "工业金属 -4.20%", desc: "中游周期成长，对库存周期与产业政策高度敏感", inflow: "多氟多 +10.7亿　宁德时代 +6.7亿　舒泰神 +2.8亿", outflow: "新和成 -5.3亿　菲利华 -4.1亿　铜陵有色 -4.1亿" },
@@ -197,7 +190,9 @@ export default function Home() {
       });
     return () => { mounted = false; };
   }, [fresh]);
-  const filtered = useMemo(() => industries.filter(i => i.n.includes(query.trim())), [query]);
+  const filteredIndustries = useMemo(() => (snapshot?.domains?.industries ?? [])
+    .filter(industry => industry.name.includes(query.trim())), [query, snapshot]);
+  const components = snapshot?.domains?.components ?? [];
   const cap = useMemo(() => {
     const base = capabilityData[capability];
     if (!snapshot) return base;
@@ -320,6 +315,12 @@ export default function Home() {
     };
   }, [capability, snapshot]);
   const asOf = formatTradeDate(snapshot?.tradeDate);
+  const leadingIndustry = snapshot?.domains?.industries.find(industry => industry.return20d !== null);
+  const leadingAllocation = snapshot?.analytics?.portfolio[0];
+  const positiveFactors = snapshot?.analytics?.factors.filter(factor => factor.signal === "偏强") ?? [];
+  const industryBreadth = snapshot?.domains?.industries.length
+    ? snapshot.domains.industries.filter(industry => industry.pctChange > 0).length / snapshot.domains.industries.length * 100
+    : null;
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -370,18 +371,28 @@ export default function Home() {
                 <div className="flow-line"><span>个股资金流入</span><b>{r.inflow}</b></div><div className="flow-line muted"><span>个股资金流出</span><b>{r.outflow}</b></div>
               </article>)}
             </div>
-            <button className="disclosure" onClick={()=>setExpanded(expanded === "components" ? null : "components")}><span>{expanded === "components" ? "▾" : "▸"}</span> 21 只成分明细（点位、区间收益、距离、回撤）</button>
-            {expanded === "components" && <div className="drawer"><span>农业银行</span><b>+1.12%</b><span>中国移动</span><b>+0.38%</b><span>宁德时代</span><b>-1.04%</b><span>中际旭创</span><b>-2.21%</b></div>}
+            <button className="disclosure" onClick={()=>setExpanded(expanded === "components" ? null : "components")}><span>{expanded === "components" ? "▾" : "▸"}</span> {components.length || 21} 只成分明细（点位、区间收益、距离、回撤）</button>
+            {expanded === "components" && <div className="component-table"><div className="component-row head"><span>分组</span><span>成分</span><span>最新点位</span><span>20日收益</span><span>60日收益</span><span>距20日线</span><span>60日回撤</span></div>{components.length ? components.map(item => <div className="component-row" key={item.code}><b>{item.group}</b><span>{item.name}<small>{item.code}</small></span><span>{item.close.toFixed(2)}<small>{signed(item.pctChange)}</small></span><span className={(item.return20d ?? 0)>=0?"positive":"negative"}>{item.return20d == null ? "—" : signed(item.return20d)}</span><span className={(item.return60d ?? 0)>=0?"positive":"negative"}>{item.return60d == null ? "—" : signed(item.return60d)}</span><span>{item.distance20dMaPct == null ? "—" : signed(item.distance20dMaPct)}</span><span className="negative">{item.maxDrawdown60dPct == null ? "—" : signed(item.maxDrawdown60dPct)}</span></div>) : <p className="empty-state">等待下一次数据刷新生成 21 只真实成分。</p>}</div>}
           </section>
 
           <section className="block compact">
             <button className="section-toggle" onClick={()=>setExpanded(expanded === "rotation" ? null : "rotation")}><span>{expanded === "rotation" ? "▾" : "▸"}</span><b>行业轮动 · 纯因子口径 · 31行业 × 近20日</b><em>数据源：Tushare / SW2021</em></button>
-            {expanded === "rotation" && <div className="rotation-table"><div className="tr th"><span>行业</span><span>涨跌</span><span>热度</span><span>资金方向</span><span>广度</span></div>{filtered.map(i=><div className="tr" key={i.n}><b>{i.n}</b><span className={i.pct>=0?"positive":"negative"}>{i.pct>0?"+":""}{i.pct}%</span><span>{i.heat}</span><span>{i.flow>0?"+":""}{i.flow}亿</span><span>{i.breadth}</span></div>)}</div>}
+            {expanded === "rotation" && <div className="rotation-table"><div className="tr th"><span>行业</span><span>当日</span><span>20日</span><span>60日</span><span>PE / PB</span></div>{filteredIndustries.map(industry=><div className="tr" key={industry.code}><b>{industry.name}<small>{industry.code}</small></b><span className={industry.pctChange>=0?"positive":"negative"}>{signed(industry.pctChange)}</span><span className={(industry.return20d ?? 0)>=0?"positive":"negative"}>{industry.return20d == null ? "—" : signed(industry.return20d)}</span><span className={(industry.return60d ?? 0)>=0?"positive":"negative"}>{industry.return60d == null ? "—" : signed(industry.return60d)}</span><span>{industry.pe?.toFixed(1) ?? "—"} / {industry.pb?.toFixed(2) ?? "—"}</span></div>)}</div>}
+          </section>
+
+          <section className="block direction-block">
+            <div className="block-head"><div><span className="section-index">02 / FORWARD VIEW</span><h2>后续投资方向</h2></div><p>先看证据与门槛，再看研究权重；这里不触发自动交易，也不替代你的风险承受能力判断。</p></div>
+            <div className="direction-grid">
+              <article><span>行业主线</span><strong>{leadingIndustry?.name ?? "等待数据"}</strong><p>{leadingIndustry?.return20d == null ? "等待20日窗口" : `20日收益 ${signed(leadingIndustry.return20d)}，需结合资金与广度确认。`}</p><button onClick={()=>setExpanded("rotation")}>查看31行业</button></article>
+              <article><span>组合倾斜</span><strong>{leadingAllocation?.name ?? "等待模型"}</strong><p>{leadingAllocation ? `研究权重 ${leadingAllocation.weight}% · ${leadingAllocation.reason}` : "等待组合模型"}</p><button onClick={()=>setActive("大类资产")}>查看研究组合</button></article>
+              <article><span>风格确认</span><strong>{positiveFactors.map(factor=>factor.name).join(" / ") || "暂无强因子"}</strong><p>仅当多个独立因子与价格方向一致时，才提高方向置信度。</p><button onClick={()=>setActive("纯因子轮动")}>查看因子评分</button></article>
+              <article><span>行动门槛</span><strong>{industryBreadth == null ? "等待数据" : `${industryBreadth.toFixed(1)}% 行业上涨`}</strong><p>广度超过55%、资金转正且回撤约束通过，再考虑提高风险暴露。</p><button onClick={()=>setActive("判断标尺")}>查看回测与门槛</button></article>
+            </div>
           </section>
 
           <section className="block compact"><button className="section-toggle" onClick={()=>setExpanded(expanded === "factor" ? null : "factor")}><span>{expanded === "factor" ? "▾" : "▸"}</span><b>风格与行业因子明细 · Barra CNE6 纯因子（查阅用）</b><em>部分因子需付费数据</em></button>{expanded === "factor" && <div className="factor-strip"><span>价值 <b>+0.71σ</b></span><span>规模 <b>-0.43σ</b></span><span>动量 <b>-0.28σ</b></span><span>波动 <b>+0.56σ</b></span><span>流动性 <b>-0.19σ</b></span></div>}</section>
 
-          <section className="block data-map"><div className="block-head"><div><span className="section-index">02 / DATA MAP</span><h2>数据能力与缺口</h2></div><p>从“可展示”推进到“可复现、可审计、可商用”的最短补数路径。</p></div><div className="capability-grid"><div><span className="cap-tag ready">现有可做</span><h3>Tushare 主骨架</h3><p>日线、财务、指数与成员、行业映射、资金流、公告事件、研报盈利预测、期货与基金基础。</p></div><div><span className="cap-tag free">免费补充</span><h3>盘中与原文证据</h3><p>AKShare、交易所/巨潮公告、央行与统计局；补足实时行情、公告原文、宏观高频与交叉校验。</p></div><div><span className="cap-tag paid">建议付费</span><h3>一致预期与风险模型</h3><p>Wind / iFinD / Choice 等机构数据；补齐点时一致预期、Barra 风险暴露、基金持仓穿透与稳定商用授权。</p></div></div></section>
+          <section className="block data-map"><div className="block-head"><div><span className="section-index">03 / DATA MAP</span><h2>数据能力与缺口</h2></div><p>从“可展示”推进到“可复现、可审计、可商用”的最短补数路径。</p></div><div className="capability-grid"><div><span className="cap-tag ready">现有可做</span><h3>Tushare 主骨架</h3><p>日线、财务、指数与成员、行业映射、资金流、公告事件、研报盈利预测、期货与基金基础。</p></div><div><span className="cap-tag free">免费补充</span><h3>盘中与原文证据</h3><p>AKShare、交易所/巨潮公告、央行与统计局；补足实时行情、公告原文、宏观高频与交叉校验。</p></div><div><span className="cap-tag paid">建议付费</span><h3>一致预期与风险模型</h3><p>Wind / iFinD / Choice 等机构数据；补齐点时一致预期、Barra 风险暴露、基金持仓穿透与稳定商用授权。</p></div></div></section>
           </> : <ResearchWorkspace spec={tabData[active]} tabKey={active} period={period} setPeriod={setPeriod} query={query} periods={snapshot?.periods} analytics={snapshot?.analytics}/>}
         </div>
       </section>

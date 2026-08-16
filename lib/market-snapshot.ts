@@ -50,6 +50,18 @@ export type SecurityFlowSnapshot = {
   netAmountYi: number;
 };
 
+export type ComponentSnapshot = {
+  code: string;
+  name: string;
+  group: "老登" | "中登" | "小登";
+  close: number;
+  pctChange: number;
+  return20d: number | null;
+  return60d: number | null;
+  distance20dMaPct: number | null;
+  maxDrawdown60dPct: number | null;
+};
+
 export type EventSnapshot = {
   code: string;
   name: string;
@@ -130,6 +142,7 @@ export type MarketSnapshot = {
   periods: Record<"今日" | "20日" | "60日", PeriodSnapshot>;
   domains: {
     industries: IndustrySnapshot[];
+    components: ComponentSnapshot[];
     valuation: {
       medianPeTtm: number | null;
       medianPb: number | null;
