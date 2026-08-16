@@ -374,11 +374,11 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
   };
   const dailyByCode = new Map(daily.rows.map(row => [String(row.ts_code), row]));
   const marketCapRanking = [...dailyBasic.rows].sort((left, right) => number(right.total_mv) - number(left.total_mv));
-  const byLiquidity = (rows: Record<string, unknown>[]) => [...rows]
+  const byLiquidity = (rows: Record<string, unknown>[], limit = 12) => [...rows]
     .sort((left, right) => number(dailyByCode.get(String(right.ts_code))?.amount) - number(dailyByCode.get(String(left.ts_code))?.amount))
-    .slice(0, 7);
+    .slice(0, limit);
   const componentDefinitions = [
-    ...marketCapRanking.slice(0, 7).map(row => ({ code: String(row.ts_code), group: "老登" as const })),
+    ...marketCapRanking.slice(0, 12).map(row => ({ code: String(row.ts_code), group: "老登" as const })),
     ...byLiquidity(marketCapRanking.slice(500, 2_000)).map(row => ({ code: String(row.ts_code), group: "中登" as const })),
     ...byLiquidity(marketCapRanking.slice(2_000)).map(row => ({ code: String(row.ts_code), group: "小登" as const })),
   ];
@@ -410,7 +410,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
 
   const securityNames = new Map(stockBasic.rows.map(row => [String(row.ts_code), String(row.name || row.ts_code)]));
   const dailyChanges = new Map(daily.rows.map(row => [String(row.ts_code), number(row.pct_chg)]));
-  const components = componentHistoryResults.flatMap((result, index) => {
+  const componentCandidates = componentHistoryResults.flatMap((result, index) => {
     const definition = componentDefinitions[index];
     const history = [...result.rows].sort((left, right) => String(left.trade_date).localeCompare(String(right.trade_date)));
     const latest = history.at(-1);
@@ -440,6 +440,13 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
       distance20dMaPct: movingAverage20 > 0 ? (latestClose / movingAverage20 - 1) * 100 : null,
       maxDrawdown60dPct: maxDrawdown * 100,
     }];
+  });
+  const components = (["老登", "中登", "小登"] as const).flatMap(group => {
+    const candidates = componentCandidates.filter(item => item.group === group);
+    const complete = candidates.filter(item =>
+      item.return20d !== null && item.return60d !== null && item.distance20dMaPct !== null && item.maxDrawdown60dPct !== null,
+    );
+    return [...complete, ...candidates.filter(item => !complete.includes(item))].slice(0, 7);
   });
   const peValues = dailyBasic.rows.map(row => number(row.pe_ttm)).filter(value => value > 0 && value < 1_000);
   const pbValues = dailyBasic.rows.map(row => number(row.pb)).filter(value => value > 0 && value < 100);
@@ -507,6 +514,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     }))
     .sort((left, right) => (right.amountYi ?? right.openInterest ?? 0) - (left.amountYi ?? left.openInterest ?? 0))
     .slice(0, 30);
+  const completeComponentCount = components.filter(item => item.return20d !== null && item.return60d !== null).length;
 
   const moduleResults: Record<string, ModuleState> = {
     行情: { status: "live", records: daily.rows.length, message: `最新交易日 ${tradeDate}` },
@@ -514,7 +522,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
       ? { status: "partial", records: dailyBasic.rows.length, message: `估值已更新；财务指标受限：${financials.error}` }
       : { status: "live", records: dailyBasic.rows.length + financials.rows.length, message: `估值与近30日财务指标已更新（财务 ${financials.rows.length}）` },
     指数行业: indexes.length
-      ? { status: indexes.length === indexDefinitions.length && industries.length === 31 && components.length === 21 ? "live" : "partial", records: indexes.length + industries.length + components.length, message: industries.length ? `${industries.length} 个申万行业、${components.length} 只成分与核心指数已更新` : "核心指数已更新；行业行情暂缺" }
+      ? { status: indexes.length === indexDefinitions.length && industries.length === 31 && components.length === 21 && completeComponentCount === 21 ? "live" : "partial", records: indexes.length + industries.length + components.length, message: industries.length ? `${industries.length} 个申万行业、${completeComponentCount}/21 只历史完整成分与核心指数已更新` : "核心指数已更新；行业行情暂缺" }
       : { status: "unavailable", records: 0, message: "核心指数接口不可用" },
     资金: moduleState(moneyflow, "个股资金流已聚合"),
     事件预期: moduleState(forecast, "当日业绩预告已更新"),
@@ -557,8 +565,8 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
     {
       id: "component_coverage",
       label: "研究成分覆盖",
-      status: components.length === 21 ? "pass" : components.length >= 18 ? "warn" : "fail",
-      detail: `${components.length} / 21`,
+      status: components.length === 21 && completeComponentCount === 21 ? "pass" : components.length >= 18 ? "warn" : "fail",
+      detail: `${completeComponentCount} / 21 历史完整`,
     },
   );
   const qualityScore = Math.round(
