@@ -49,7 +49,12 @@ jobs:
         env:
           REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
           RESEARCH_URL: https://market-research-notebook-cn.marciayang-lin.chatgpt.site/api/research-analytics
-        run: python3 python/research_engine.py --url "${RESEARCH_URL}" --output research-analytics.json
+        run: |
+          curl --silent --show-error --fail-with-body \
+            --header "authorization: Bearer ${REFRESH_SECRET}" \
+            --output research-inputs.json \
+            "${RESEARCH_URL}"
+          python3 python/research_engine.py --input research-inputs.json --output research-analytics.json
 
       - name: Publish Python analytics
         env:
