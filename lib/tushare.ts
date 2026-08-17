@@ -315,7 +315,15 @@ function buildAnalytics(
       evidence: ["moneyflow", "算法估算口径"],
     },
   ];
-  return { observations, factors, portfolio, backtest };
+  return {
+    engine: "typescript-fallback",
+    schemaVersion: "research-analytics/v1",
+    generatedAt: new Date().toISOString(),
+    observations,
+    factors,
+    portfolio,
+    backtest,
+  };
 }
 
 export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot> {
@@ -554,6 +562,20 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
   const futuresList = instruments(futures.rows, true);
   const fundsList = instruments(funds.rows, false);
   const analytics = buildAnalytics(periods, market, industries, financialUpdates, valuation, indexResults);
+  const researchInputs: MarketSnapshot["researchInputs"] = {
+    schemaVersion: "research-inputs/v1",
+    tradeDate,
+    market,
+    periods,
+    industries,
+    financials: financialUpdates,
+    valuation,
+    indexHistory: indexResults.map((result, index) => ({
+      code: indexDefinitions[index][0],
+      name: indexDefinitions[index][1],
+      rows: result.rows.map(row => ({ tradeDate: String(row.trade_date), close: number(row.close) })),
+    })),
+  };
   const checks = qualityChecks(daily.rows, indexes, market, moduleResults);
   checks.push(
     {
@@ -608,6 +630,7 @@ export async function buildMarketSnapshot(token: string): Promise<MarketSnapshot
       funds: fundsList,
     },
     analytics,
+    researchInputs,
     modules: moduleResults,
     quality: { score: qualityScore, checks },
     errors,

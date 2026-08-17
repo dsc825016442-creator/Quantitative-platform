@@ -19,13 +19,16 @@
 
 ```text
 GitHub 定时任务
-      │ Bearer 刷新密钥
+      │ ① Bearer 刷新密钥
       ▼
 受保护刷新接口 ──► Tushare Pro
       │                │
       │ 聚合/质量检查  │ 行情、估值、指数、资金、事件、基金期货
       ▼                ▼
-Cloudflare D1：快照 + 任务日志
+Cloudflare D1：快照 + 研究输入 + 任务日志
+      ▲
+      │ ② 受保护输入 / ③ Python分析写回
+Python研究引擎（GitHub Actions）
       │
       ▼
 公开只读快照接口 ──► 研究驾驶舱
@@ -100,3 +103,37 @@ Accepted
 
 - 优点：固定规则、数量稳定、可以每日复算，不再依赖手工示例名单。
 - 缺点：这是研究代表篮子，不是指数公司发布的官方成分；换手率和交易成本需在实盘前另行约束。
+
+## ADR-005：采用 Python 离线研究引擎与 TypeScript 在线服务
+
+### 状态
+
+Accepted
+
+### 背景
+
+在线刷新已包含近百次外部查询，因子、组合和回测继续增长会增加边缘函数复杂度。页面与公开 API 已稳定运行，不适合整体重写。
+
+### 决策
+
+- TypeScript 继续负责 Tushare 密钥、数据采集、D1、公开 API、页面和 Python 失败时的兜底分析。
+- Python 3.12 负责观察、因子、研究组合和无未来函数回测。
+- Python 只通过现有 `REFRESH_SECRET` 访问受保护研究输入并写回结果，不持有 Tushare Token。
+- 协议固定为 `research-inputs/v1` 与 `research-analytics/v1`；写回时必须匹配交易日且组合权重合计为 100%。
+- 公开快照删除内部 `researchInputs`，避免无意扩大数据分发面。
+
+### 后果
+
+- 正面：研究计算可独立测试和扩展；Python 失败时页面仍有 TypeScript 兜底；无需新增付费基础设施或复制 Tushare Token。
+- 负面：每日任务多一个运行阶段；两种语言需要维护相同协议；GitHub Actions 故障会使引擎暂时停留在兜底模式。
+- 替代方案：整体改成 Python 会破坏现有 Sites 部署；把 Tushare Token 放入 GitHub 可简化管道，但扩大密钥暴露范围，因此未采用。
+
+### 运行与故障处理
+
+| 故障 | 处理 |
+|---|---|
+| Python 输入协议不匹配 | 任务失败，保留 TypeScript 兜底结果 |
+| Python 输出交易日过期 | 写回接口返回 409，不覆盖新快照 |
+| Python 输出权重或结构无效 | 写回接口返回 400 |
+| Python 任务超时 | GitHub 任务失败并由每日巡检提示 |
+| Python 依赖变化 | 第一阶段仅使用 Python 标准库，固定 Python 3.12 |

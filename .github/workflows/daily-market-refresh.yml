@@ -18,6 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Check out research engine
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Refresh Tushare snapshot
         env:
           REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
@@ -36,3 +44,22 @@ jobs:
             sleep $((attempt * 15))
           done
           exit 1
+
+      - name: Compute research analytics with Python
+        env:
+          REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
+          RESEARCH_URL: https://market-research-notebook-cn.marciayang-lin.chatgpt.site/api/research-analytics
+        run: python3 python/research_engine.py --url "${RESEARCH_URL}" --output research-analytics.json
+
+      - name: Publish Python analytics
+        env:
+          REFRESH_SECRET: ${{ secrets.REFRESH_SECRET }}
+          RESEARCH_URL: https://market-research-notebook-cn.marciayang-lin.chatgpt.site/api/research-analytics
+        run: |
+          response=$(curl --silent --show-error --fail-with-body \
+            --request POST \
+            --header "authorization: Bearer ${REFRESH_SECRET}" \
+            --header "content-type: application/json" \
+            --data-binary @research-analytics.json \
+            "${RESEARCH_URL}")
+          printf '%s\n' "${response}"

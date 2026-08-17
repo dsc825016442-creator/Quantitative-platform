@@ -22,9 +22,11 @@ export async function GET() {
     if (!row) {
       return Response.json({ snapshot: null, latestRun: latestRun ?? null, status: "waiting_for_first_refresh" });
     }
+    const publicSnapshot = JSON.parse(row.payload) as Partial<MarketSnapshot>;
+    delete publicSnapshot.researchInputs;
     const freshnessHours = Math.max(0, (Date.now() - new Date(row.generatedAt).getTime()) / 3_600_000);
     return Response.json({
-      snapshot: JSON.parse(row.payload) as MarketSnapshot,
+      snapshot: publicSnapshot,
       latestRun: latestRun ?? null,
       freshnessHours,
       status: row.status,

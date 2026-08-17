@@ -92,6 +92,9 @@ export type InstrumentSnapshot = {
 };
 
 export type AnalyticsSnapshot = {
+  engine: "typescript-fallback" | "python";
+  schemaVersion: "research-analytics/v1";
+  generatedAt: string;
   observations: Array<{
     title: string;
     direction: "positive" | "neutral" | "negative";
@@ -121,6 +124,21 @@ export type AnalyticsSnapshot = {
     excessWinRatePct: number;
     methodology: string;
   } | null;
+};
+
+export type ResearchInputs = {
+  schemaVersion: "research-inputs/v1";
+  tradeDate: string;
+  market: MarketSnapshot["market"];
+  periods: MarketSnapshot["periods"];
+  industries: IndustrySnapshot[];
+  financials: FinancialSnapshot[];
+  valuation: MarketSnapshot["domains"]["valuation"];
+  indexHistory: Array<{
+    code: string;
+    name: string;
+    rows: Array<{ tradeDate: string; close: number }>;
+  }>;
 };
 
 export type MarketSnapshot = {
@@ -155,6 +173,7 @@ export type MarketSnapshot = {
     funds: InstrumentSnapshot[];
   };
   analytics: AnalyticsSnapshot;
+  researchInputs: ResearchInputs;
   modules: Record<string, ModuleState>;
   quality: {
     score: number;

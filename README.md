@@ -16,7 +16,7 @@
 
 ## 本地开发
 
-要求 Node.js `>=22.13.0`。
+要求 Node.js `>=22.13.0` 和 Python `>=3.12`。Python 第一阶段仅使用标准库，无需安装额外依赖。
 
 ```bash
 npm install
@@ -91,6 +91,7 @@ npm run build
 - `db/`：Cloudflare D1 / Drizzle 数据层
 - `worker/`：部署运行入口
 - `tests/`：渲染和关键交互验证
+- `python/`：观察、因子、组合与回测研究引擎
 - `.openai/hosting.json`：站点部署配置
 
 ## 数据配置
@@ -102,10 +103,17 @@ npm run build
 1. GitHub Actions 每天北京时间 18:30 使用独立刷新密钥触发站内任务。
 2. 从 Tushare 查找最近一个有行情的交易日。
 3. 拉取日线、日频估值、核心指数、资金流、业绩预告、基金与期货数据。
-4. 将聚合后的快照写入 Cloudflare D1；接口权限不足时保留其他成功模块。
-5. 页面读取最近一次成功快照，失败任务不会覆盖更完整的历史快照。
+4. 将聚合后的快照和受保护研究输入写入 Cloudflare D1；接口权限不足时保留其他成功模块。
+5. Python 3.12 从受保护接口读取研究输入，计算观察、因子、组合和回测后按交易日写回。
+6. 页面读取最近一次成功快照；Python 失败时自动保留 TypeScript 兜底分析。
 
 Tushare Token 只保存在网站托管端；GitHub Actions 仅持有不能读取行情的随机刷新密钥。刷新接口使用 Bearer 鉴权，并限制同一自然日只生成一次快照。各模块是否可用仍取决于 Tushare 账号积分和接口权限。数据扩展顺序见 `docs/data-source-plan.md`。
+
+手动验证 Python 引擎：
+
+```bash
+python3 -m unittest discover -s python/tests
+```
 
 ## 分享与协作
 

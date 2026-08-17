@@ -71,9 +71,12 @@ test("keeps tabs, periods, filters and disclosures interactive", async () => {
 });
 
 test("protects and schedules the production market refresh", async () => {
-  const [route, workflow] = await Promise.all([
+  const [route, researchRoute, publicRoute, workflow, pythonEngine] = await Promise.all([
     readFile(new URL("../app/api/refresh-market/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/research-analytics/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/market-snapshot/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/daily-market-refresh.yml", import.meta.url), "utf8"),
+    readFile(new URL("../python/research_engine.py", import.meta.url), "utf8"),
   ]);
 
   assert.match(route, /REFRESH_SECRET/);
@@ -85,5 +88,13 @@ test("protects and schedules the production market refresh", async () => {
   assert.match(workflow, /secrets\.REFRESH_SECRET/);
   assert.match(workflow, /for attempt in 1 2 3/);
   assert.match(workflow, /x-refresh-force/);
+  assert.match(workflow, /setup-python@v5/);
+  assert.match(workflow, /python3 python\/research_engine\.py/);
+  assert.match(workflow, /api\/research-analytics/);
   assert.doesNotMatch(workflow, /TUSHARE_TOKEN/);
+  assert.match(researchRoute, /REFRESH_SECRET/);
+  assert.match(researchRoute, /stale analytics trade date/);
+  assert.match(publicRoute, /delete publicSnapshot\.researchInputs/);
+  assert.match(pythonEngine, /"engine": "python"/);
+  assert.match(pythonEngine, /def build_backtest/);
 });

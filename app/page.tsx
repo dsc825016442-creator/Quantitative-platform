@@ -159,7 +159,7 @@ function ResearchWorkspace({ spec, tabKey, period, setPeriod, query, periods, an
     <div className="research-grid"><article className="research-card main"><div className="research-card-head"><div><span>DETAIL / {period}</span><h2>{period}研究明细</h2></div><b>{rows.length} 条</b></div><div className="research-table"><div className="research-row head">{columns.map(c=><span key={c}>{c}</span>)}</div>{rows.map((row,index)=><div className="research-row" key={`${period}-${row[0]}-${index}`}>{row.map((cell,i)=><span className={i===0?"primary":""} key={`${cell}-${i}`}>{cell}</span>)}</div>)}</div></article>
       <aside className="research-card insights"><div className="research-card-head"><div><span>INTERPRETATION</span><h2>本页结论</h2></div></div><ol>{spec.insights.map((item,index)=><li key={item}><b>{String(index+1).padStart(2,"0")}</b><p>{item}</p></li>)}</ol><div className="evidence-box"><span>数据与证据</span><div>{spec.evidence.map(item=><code key={item}>{item}</code>)}</div></div></aside>
     </div>
-    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>{analytics ? "P2 分析由可追溯规则生成；组合仅供研究，不会自动交易。" : livePeriod ? "核心指数已按真实交易日重算。" : `当前仍为 ${meta.sample} 研究快照。`}</p>{analytics && <div className="share-actions"><button onClick={copySummary}>复制摘要</button><button onClick={downloadAnalytics}>导出 JSON</button></div>}</footer>
+    <footer className="research-foot"><span><i/>{period}窗口已生效</span><p>{analytics ? `${analytics.engine === "python" ? "Python" : "TypeScript兜底"} 分析引擎 · 可追溯规则生成；组合仅供研究，不会自动交易。` : livePeriod ? "核心指数已按真实交易日重算。" : `当前仍为 ${meta.sample} 研究快照。`}</p>{analytics && <div className="share-actions"><button onClick={copySummary}>复制摘要</button><button onClick={downloadAnalytics}>导出 JSON</button></div>}</footer>
   </section>
 }
 
